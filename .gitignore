@@ -1,0 +1,15 @@
+# common files to ignore
+*~
+*.orig
+*.rej
+*.bak
+
+# compiled files
+*.pyc
+
+# Files in the project root directory
+/.settings
+/dist/
+/build/
+/*.egg
+/*.egg-info

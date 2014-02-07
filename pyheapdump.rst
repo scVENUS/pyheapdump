@@ -1,0 +1,3 @@
+.. # currentmodule:: pyheapdump
+
+.. automodule:: pyheapdump
