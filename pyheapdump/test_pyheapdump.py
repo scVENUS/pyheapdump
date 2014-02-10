@@ -26,8 +26,20 @@ import unittest
 import sPickle
 import tempfile
 import os
+import threading
 
 from . import _pyheapdump
+
+
+class BlockingPickle(object):
+    def __init__(self, value=1):
+        self.semaphore = threading.Semaphore(value)
+        self.var = 0
+
+    def __getstate__(self):
+        self.semaphore.acquire()
+        return dict(var=self.var)
+        self.semaphore.release()
 
 
 class PyheapdumpTest(unittest.TestCase):
@@ -73,6 +85,12 @@ class PyheapdumpTest(unittest.TestCase):
         #sPickle.SPickleTools.dis(p)
         with open(self.dump_file_name, "wb") as f:
             f.write(p)
+
+    @unittest.skip("needs monkey patching of thread/threading ... Not yet implemented")
+    def testCreateBlocking(self):
+        blocking_obj = BlockingPickle(0)
+        _pyheapdump.create_dump(exc_info=False, threads=True, tasklets=True)
+        del blocking_obj
 
     def testLoadDump(self):
         dump = _pyheapdump.load_dump(self.dump_file_name)

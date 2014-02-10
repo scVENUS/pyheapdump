@@ -86,6 +86,13 @@ except ImportError:
         finally:
             sys.setcheckinterval(old)
 
+    @contextlib.contextmanager
+    def block_trap():
+        try:
+            yield
+        finally:
+            pass
+
 else:
     isStackless = True
 
@@ -104,8 +111,18 @@ else:
                 current.throw(exc=exc_info[0], val=exc_info[1], tb=exc_info[2])
             else:
                 current.switch()
-        stackless.tasklet().bind(call_func, ()).switch()
+        result.append(stackless.tasklet())
+        result[0].set_atomic(True)
+        result.pop().bind(call_func, ()).switch()
         return result[0]
+
+    @contextlib.contextmanager
+    def block_trap():
+        stackless.current.block_trap = True
+        try:
+            yield
+        finally:
+            stackless.current.block_trap = False
 
 
 @contextlib.contextmanager
@@ -120,53 +137,85 @@ def high_recusion_limit(factor=4):
 # API
 
 
-def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None, lock=False):
+def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None):
     """
-    Saves a Python traceback in a pickled file. This function will usually be called from
-    an except block to allow post-mortem debugging of a failed process.
+    Create and save a Python heap-dump.
 
-    The saved file can be loaded with load_dump which creates a fake traceback
-    object that can be passed to any reasonable Python debugger.
+    This function will usually be called from an except block to
+    allow post-mortem debugging of a failed process. The function calls
+    the function :func:`create_dump` to create the dump.
 
-    The simplest way to do that is to run:
+    The saved file can be loaded with :func:`load_dump` or :func:`debug_dump`, which recreates
+    traceback / thread and tasklet objects and passes them to a Python debugger.
 
-       $ pyheapdump.py my_dump_file.dump
+    The simplest way to do that is to run::
+
+       $ python -m pyheapdump my_dump_file.dump
+
+    Arguments
+
+    :param filename: name of the dump-file
+    :type filename: str
+    :param tb: an optional traceback. This parameter exists for compatibility with the Python module :mod:`pydump`.
+    :type tb: types.TracebackType
+    :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
+        returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
+        exception information to the dump.
+    :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
+        or `None` for all threads (default) or `False` to omit thread information altogether.
+    :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
+    :returns: `None`.
     """
     with atomic():
         if tb is not None and exc_info is None:
             exc_info = (None, None, tb)
-        dump = create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets, lock=lock)
+        dump = create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets)
         with open(filename, 'wb') as f:
             f.write(dump)
 
 
-def create_dump(exc_info=None, threads=None, tasklets=None, lock=False):
+def create_dump(exc_info=None, threads=None, tasklets=None):
     """
-    Create a Python dump
+    Create a Python heap-dump.
 
-    This function creates a Python dump. The dump can contain various
+    This function creates a Python dump. The dump contains various
     informations about the currently executing Python program:
 
      * exception information
      * threads
      * tasklets
 
+    The exact content depends on the function arguments.
+
+    This function tries to prevent thread context switches during the creation of the
+    dump. On Stackless it uses the tasklet flag :attr:`~stackless.tasklet.atomic`. Otherwise
+    it temporarily manipulates the check-interval. Additionally this function
+    temporarily increases the recursion limit.
+
+    This function will usually be called from an except block to
+    allow post-mortem debugging of a failed process. The function returns
+    a byte string, that can be loaded with :func:`load_dump` or :func:`debug_dump`.
+
+    Arguments
+
+    :param filename: name of the dump-file
+    :type filename: str
+    :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
+        returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
+        exception information to the dump.
+    :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
+        or `None` for all threads (default) or `False` to omit thread information altogether.
+    :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
+    :returns: the compressed pickle of the dump.
+    :rtype: str
     """
     with atomic(), high_recusion_limit():
-        return run_in_tasklet(_create_dump_impl, exc_info=exc_info, threads=threads, tasklets=tasklets, lock=lock)
+        return run_in_tasklet(_create_dump_impl, exc_info=exc_info, threads=threads, tasklets=tasklets)
 
 
-def _create_dump_impl(exc_info=None, threads=None, tasklets=None, lock=False, current_tasklet=None):
+def _create_dump_impl(exc_info=None, threads=None, tasklets=None, current_tasklet=None):
     """
-    Create a Python dump
-
-    This function creates a Python dump. The dump can contain various
-    informations about the currently executing Python program:
-
-     * exception information
-     * threads
-     * tasklets
-
+    Implementation of :func:`create_dump`.
     """
     with atomic(), high_recusion_limit():
         files = {}
@@ -194,7 +243,7 @@ def _create_dump_impl(exc_info=None, threads=None, tasklets=None, lock=False, cu
             threads = list(threads)
 
         # add tasklets
-        if isStackless and tasklets is not None:
+        if isStackless and tasklets is not False:
             dump['tasklets'] = _collect_tasklets(current_tasklet, threads)
             if dump['tasklets']:
                 threads = False
@@ -219,7 +268,8 @@ def _create_dump_impl(exc_info=None, threads=None, tasklets=None, lock=False, cu
             del files
             # pickle
             pt = sPickle.SPickleTools(pickler_class=DumpPickler)
-            return pt.dumps(dump)
+            with block_trap():
+                return pt.dumps(dump)
         finally:
             dump.clear()
 
@@ -447,9 +497,29 @@ def _safe_repr(v):
         return "repr error: " + str(e)
 
 
-def load_dump(filename):
-    with open(filename, 'rb') as f:
-        dump = sPickle.SPickleTools.loads(f.read(), unpickler_class=FailSaveUnpickler)
+def load_dump(filename=None, dump=None):
+    """
+    Load a Python heap dump
+
+    This function loads and preprocesses a Python dump file or
+    a python dump string or an already unpickled heap dump dictionary.
+
+    Arguments
+
+    :param filename: the filename of the heap-dump file.
+    :type filename: str
+    :param dump: The pickled and compressed dump as a byte string or the already
+       unpickled heap dump dictionary. Exactly one of the two arguments *filename*
+       and *dump* must be given.
+    :type dump: str or dict
+    :returns: the preprocessed heap dump dictionary
+    :rtype: dict
+    """
+    if dump is None:
+        with open(filename, 'rb') as f:
+            dump = f.read()
+    if isinstance(dump, str):
+        dump = sPickle.SPickleTools.loads(dump, unpickler_class=FailSaveUnpickler)
     if 'tasklets' in dump and 'thread_frames' not in dump:
         # Stackless
         tf = {}
@@ -517,7 +587,37 @@ def load_dump(filename):
     return dump
 
 
-def debug_dump(dump_filename, post_mortem_func=None):
+def debug_dump(dump_filename, dump=None, post_mortem_func=None):
+    """
+    Load and debug a Python heap dump
+
+    This function loads and debugs a Python dump. First it calls :func:`load_dump` to
+    load the dump and then it invokes a debugger to analyse the loaded dump.
+
+    This function currently looks for the following debuggers in the given order.
+    It uses the first debugger found:
+
+     * :mod:`pydevd`, the debugger from the PyDev eclipse plugin. Use version 3.3.3 or later and
+       run the remote debug server.
+     * :mod:`pdb`, the debugger from the Python library. Unfortunately, :mod:`pdb` supports neither
+       threads nor tasklet.
+
+    You can invoke this function directly from your shell::
+
+        $ python -m pyheapdump mydumpfile.pydump
+
+    Arguments
+
+    :param filename: the filename of the heap-dump file.
+    :type filename: str
+    :param dump: The pickled and compressed dump as a byte string or the already
+       unpickled heap dump dictionary. Exactly one of the two arguments *filename*
+       and *dump* must be given.
+    :type dump: str or dict
+    :param post_mortem_func: Subject to change. Intentionally not documented.
+    :returns: the preprocessed heap dump dictionary
+    :rtype: dict
+    """
     if post_mortem_func is None:
         try:
             import pydevd
@@ -583,11 +683,11 @@ def debug_dump(dump_filename, post_mortem_func=None):
                 else:
                     pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
 
-    return _debug_dump_impl(dump_filename, post_mortem_func)
+    return _debug_dump_impl(dump_filename, dump, post_mortem_func)
 
 
-def _debug_dump_impl(dump_filename, post_mortem_func):
-    dump = load_dump(dump_filename)
+def _debug_dump_impl(dump_filename, dump, post_mortem_func):
+    dump = load_dump(filename=dump_filename, dump=dump)
     _cache_files(dump['files'])
     _old_checkcache = linecache.checkcache
     linecache.checkcache = lambda filename = None: None
