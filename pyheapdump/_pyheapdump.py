@@ -235,7 +235,7 @@ def _create_dump_impl(exc_info=None, threads=None, tasklets=None, current_taskle
         dump['main_thread_id'] = main_thread_id()
 
         current_frames = sys._current_frames()
-        if threads is True:
+        if threads is None:
             threads = current_frames.keys()
         elif isinstance(threads, int):
             threads = [threads]

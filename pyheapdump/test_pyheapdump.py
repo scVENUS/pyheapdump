@@ -78,7 +78,7 @@ class PyheapdumpTest(unittest.TestCase):
         try:
             self.raise_exc()
         except Exception:
-            p = _pyheapdump.create_dump(exc_info=sys.exc_info(), threads=True, tasklets=True)
+            p = _pyheapdump.create_dump(exc_info=sys.exc_info(), threads=None, tasklets=None)
         self.assertIsInstance(p, type(b""))
         modules = sPickle.SPickleTools.getImportList(p)
         #pprint.pprint(modules)
@@ -89,7 +89,7 @@ class PyheapdumpTest(unittest.TestCase):
     @unittest.skip("needs monkey patching of thread/threading ... Not yet implemented")
     def testCreateBlocking(self):
         blocking_obj = BlockingPickle(0)
-        _pyheapdump.create_dump(exc_info=False, threads=True, tasklets=True)
+        _pyheapdump.create_dump(exc_info=False, threads=None, tasklets=None)
         del blocking_obj
 
     def testLoadDump(self):
