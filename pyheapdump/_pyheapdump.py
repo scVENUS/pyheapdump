@@ -16,11 +16,11 @@
 #  limitations under the License.
 #
 
-
 from __future__ import absolute_import, print_function, unicode_literals, division
 
 DUMP_VERSION = 2
-__all__ = ('save_dump', 'create_dump', 'load_dump', 'debug_dump')
+# for now we export just a limited set of symbols.
+__all__ = ('save_dump', 'create_dump', 'load_dump', 'debug_dump', 'MimeMessageFormatter')
 
 import os
 import sys
@@ -28,13 +28,21 @@ import types
 import thread
 import threading
 import collections
-import sPickle
 import pickle
 import linecache
 import inspect
 import contextlib
 import traceback
 import weakref
+import datetime
+import warnings
+import re
+from email import header, message_from_file, message_from_string, message
+from email.mime import application, multipart
+from email.utils import formatdate
+
+import sPickle
+
 
 try:
     from threading import main_thread
@@ -134,178 +142,338 @@ def high_recusion_limit(factor=4):
     finally:
         sys.setrecursionlimit(old)
 
+
 # API
+class HeapDumper(object):
+    def save_dump(self, filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None, formatter=None):
+        """
+        Create and save a Python heap-dump.
+
+        This function will usually be called from an except block to
+        allow post-mortem debugging of a failed process. The function calls
+        the function :func:`create_dump` to create the dump.
+
+        The saved file can be loaded with :func:`load_dump` or :func:`debug_dump`, which recreates
+        traceback / thread and tasklet objects and passes them to a Python debugger.
+
+        The simplest way to do that is to run::
+
+           $ python -m pyheapdump my_dump_file.dump
+
+        Arguments
+
+        :param filename: name of the dump-file
+        :type filename: str
+        :param tb: an optional traceback. This parameter exists for compatibility with the Python module :mod:`pydump`.
+        :type tb: types.TracebackType
+        :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
+            returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
+            exception information to the dump.
+        :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
+            or `None` for all threads (default) or `False` to omit thread information altogether.
+        :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
+        :param headers: a mutable mapping, that contains header lines. All keys must be unicode strings. Values must be text, bytes or None.
+        :type headers: collections.MutableMapping
+        :param formatter: the formatter to be used. The formatter must be a callable with two arguments *pickle* and *headers* that returns the
+                          bytes of the heap dump file. See :class:`MimeMessageFormatter` for an example.
+        :returns: `None`.
+        """
+        with atomic():
+            if tb is not None and exc_info is None:
+                exc_info = (None, None, tb)
+            pickle, headers = self.create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets, headers=headers)
+            if formatter is None:
+                formatter = DEFAULT_FORMATTER
+            try:
+                write = filename.write
+            except AttributeError:
+                with open(filename, 'wb') as f:
+                    return f.write(formatter(pickle, headers))
+            else:
+                return write(formatter(pickle, headers))
+
+    def create_dump(self, exc_info=None, threads=None, tasklets=None, headers=None):
+        """
+        Create a Python heap-dump.
+
+        This function creates a Python dump. The dump contains various
+        informations about the currently executing Python program:
+
+         * exception information
+         * threads
+         * tasklets
+
+        The exact content depends on the function arguments.
+
+        This function tries to prevent thread context switches during the creation of the
+        dump. On Stackless it uses the tasklet flag :attr:`~stackless.tasklet.atomic`. Otherwise
+        it temporarily manipulates the check-interval. Additionally this function
+        temporarily increases the recursion limit.
+
+        This function will usually be called from an except block to
+        allow post-mortem debugging of a failed process. The function returns
+        a byte string, that can be loaded with :func:`load_dump` or :func:`debug_dump`.
+
+        Arguments
+
+        :param filename: name of the dump-file
+        :type filename: str
+        :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
+            returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
+            exception information to the dump.
+        :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
+            or `None` for all threads (default) or `False` to omit thread information altogether.
+        :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
+        :param headers: a mutable mapping, that contains header lines. All keys must be unicode strings. Values must be text, bytes or None.
+        :type headers: collections.MutableMapping
+        :returns: the compressed pickle of the heap-dump, the updated headers collection
+        :rtype: tuple
+        """
+        with atomic(), high_recusion_limit():
+            return run_in_tasklet(self._create_dump_impl, exc_info=exc_info, threads=threads, tasklets=tasklets, headers=headers)
+
+    def _create_dump_impl(self, exc_info=None, threads=None, tasklets=None, current_tasklet=None, headers=None):
+        """
+        Implementation of :func:`create_dump`.
+        """
+        with atomic(), high_recusion_limit():
+            files = {}
+            dump = {'dump_version': DUMP_VERSION, 'files': files}
+            # add exception information
+            if exc_info is not False:
+                if exc_info is None:
+                    exc_info = sys.exc_info()
+                dump['exception_class'] = exc_info[0]
+                dump['exception'] = exc_info[1]
+                dump['traceback'] = exc_info[2]
+                _get_traceback_files(exc_info[2], files=files)
+
+            # add threads
+            current_thread_id = thread.get_ident()
+            dump['current_thread_id'] = current_thread_id
+            dump['main_thread_id'] = main_thread_id()
+
+            current_frames = sys._current_frames()
+            if threads is None:
+                threads = current_frames.keys()
+            elif isinstance(threads, int):
+                threads = [threads]
+            elif isinstance(threads, (list, tuple, collections.Sequence)):
+                threads = list(threads)
+
+            # add tasklets
+            if isStackless and tasklets is not False:
+                dump['tasklets'] = self._collect_tasklets(current_tasklet, threads)
+                if dump['tasklets']:
+                    threads = False
+
+            if threads:
+                thread_frames = {}
+                dump['thread_frames'] = thread_frames
+                for tid in threads:
+                    try:
+                        frame = current_frames[tid]
+                    except KeyError:
+                        pass
+                    else:
+                        thread_frames[tid] = frame
+                        _get_frame_files(frame, files)
+                        # del frame
+                del thread_frames
+            del current_frames
+            del exc_info
+
+            try:
+                del files
+                # pickle
+                pt = sPickle.SPickleTools(pickler_class=DumpPickler)
+                with block_trap():
+                    pickle = pt.dumps(dump)
+                pt = None
+
+                if headers is None:
+                    headers = {}
+                headers = self.fill_headers(headers, dump, pickle)
+            finally:
+                dump.clear()
+        return pickle, headers
+
+    def _collect_tasklets(self, current_tasklet, threads):
+        taskletType = stackless.tasklet
+        this_tasklet = stackless.current
+        tasklets = {}
+        for tid in threads:
+            main, current, runcount = stackless.get_thread_info(tid)
+
+            #
+            # find scheduled tasklets
+            #
+            t = current.next
+            if current is this_tasklet:
+                current = current_tasklet
+
+            assert current is not this_tasklet
+            assert main is not this_tasklet
+
+            other = {id(current): current}
+            other[id(main)] = main
+            while t is not None and t is not this_tasklet:
+                oid = id(t)
+                if oid in other:
+                    break
+                other[oid] = t
+                t = t.next
+
+            #
+            # Here we could look at other tasklet-holders too
+            #
+
+            tasklets[tid] = (main, current, other)
+        return tasklets
+
+    def compute_description(self, dump, pickle):
+        """
+        Compute the informational description for the dump.
+
+        This implementation returns None. A sub-class my overwrite
+        this method.
+
+        :param dump: the content of the dump
+        :type dump: dict
+        :param pickle: the (compressed) pickle of *dump*
+        :type pickle: bytes
+        :returns: the human readable description
+        :rtype: unicode string or None
+        """
+        return None
+
+    def fill_headers(self, headers, dump, pickle):
+        """
+        This method fills in meta information about the dump.
+
+        A subclass may override this method.
+
+        :param headers: a dictionary
+        :type headers: dict
+        :param description: the human readable description
+        :type description: unicode or None
+        :param dump: the content of the dump
+        :type dump: dict
+        :param pickle: the (compressed) pickle of *dump*
+        :type pickle: bytes
+        :returns: a pickleable mapping object with meta information, usually headers
+        :rtype: usually dict
+        """
+        if not isinstance(headers, collections.MutableMapping):
+            # A custom meta data type is used.
+            return headers
+
+        if 'version' not in headers:
+            headers['version'] = str(DUMP_VERSION)
+        if 'utcnow' not in headers:
+            headers['utcnow'] = datetime.datetime.utcnow().isoformat()
+        if 'pid' not in headers:
+            headers['pid'] = str(os.getpid())
+        if 'sys_version_info' not in headers:
+            headers['sys_version_info'] = repr(sys.version_info)
+        if 'sys_flags' not in headers:
+            headers['sys_flags'] = repr(sys.flags)
+        if 'sys_executable' not in headers:
+            headers['sys_executable'] = sys.executable
+        if 'sys_argv' not in headers:
+            headers['sys_argv'] = repr(sys.argv)
+        if 'sys_path' not in headers:
+            headers['sys_path'] = repr(sys.path)
+        return headers
 
 
-def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None):
+class BinaryFormatter(object):
+    def __call__(self, pickle, headers):
+        return pickle
+
+
+class MimeMessageFormatter(object):
     """
-    Create and save a Python heap-dump.
+    This class formats a heap-dump as a MIME-message.
 
-    This function will usually be called from an except block to
-    allow post-mortem debugging of a failed process. The function calls
-    the function :func:`create_dump` to create the dump.
+    Methods:
 
-    The saved file can be loaded with :func:`load_dump` or :func:`debug_dump`, which recreates
-    traceback / thread and tasklet objects and passes them to a Python debugger.
-
-    The simplest way to do that is to run::
-
-       $ python -m pyheapdump my_dump_file.dump
-
-    Arguments
-
-    :param filename: name of the dump-file
-    :type filename: str
-    :param tb: an optional traceback. This parameter exists for compatibility with the Python module :mod:`pydump`.
-    :type tb: types.TracebackType
-    :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
-        returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
-        exception information to the dump.
-    :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
-        or `None` for all threads (default) or `False` to omit thread information altogether.
-    :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
-    :returns: `None`.
+    .. automethod:: __call__
     """
-    with atomic():
-        if tb is not None and exc_info is None:
-            exc_info = (None, None, tb)
-        dump = create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets)
-        with open(filename, 'wb') as f:
-            f.write(dump)
+    _ASCII_HEADER_RE = re.compile("[^ \x21-\x7e]")
+    CONTENT_TYPE_HEAPDUMP = b"x.python-heapdump"
+    HEADER_SUBJECT = u"Subject"
+    HEADER_DATE = u"Date"
+    HEADER_MSGID = u"Message-ID"
+
+    HEADER_NAME_MAPPING = {
+        u"description": HEADER_SUBJECT,
+        u"date": HEADER_DATE,
+        u"id": HEADER_MSGID
+    }
+
+    PREAMBLE = b"""This file contains the dump of the internal state of a Python program.
+It helps analysing program failures.
+"""
+
+    def __init__(self, ensure_ascii=True, unixfrom=False, preamble=None):
+        self.ensure_ascii = ensure_ascii
+        self.unixfrom = unixfrom
+        if preamble is not None:
+            self.PREAMBLE = preamble
+
+    def __call__(self, pickle, headers):
+        """
+        Format the *pickle* and the *headres* as a flat byte string.
+
+        :param pickle: the compressed pickle of the heap dump
+        :type pickle: bytes
+        :param headers: a mapping
+        :type headers: collections.Mapping
+        :returns: a MIME message
+        :rtype: bytes
+        """
+        msg = multipart.MIMEMultipart("related", type="application/" + self.CONTENT_TYPE_HEAPDUMP)
+        msg.attach(application.MIMEApplication(pickle, self.CONTENT_TYPE_HEAPDUMP))
+        msg.preamble = self.PREAMBLE
+        for k in sorted(headers):
+            v = headers[k]
+            if not v:
+                continue
+            if not isinstance(v, basestring):
+                warnings.warn("pyheapdump: ignoring non string header")
+                continue
+
+            k = self.HEADER_NAME_MAPPING.get(k, u'X-python-heapdump-' + k)
+
+            if self._ASCII_HEADER_RE.search(v) is None and v.strip() == v:
+                msg[k] = header.Header(v, maxlinelen=2000000000, header_name=k)
+            elif isinstance(v, bytes):
+                msg[k] = header.Header(v, charset="iso-8859-1", header_name=k)
+            else:
+                msg[k] = header.Header(v.encode("utf-8"), charset="utf-8", header_name=k)
+        if self.HEADER_DATE not in msg:
+            msg[self.HEADER_DATE] = formatdate(localtime=True)
+        return msg.as_string(self.unixfrom)
 
 
-def create_dump(exc_info=None, threads=None, tasklets=None):
-    """
-    Create a Python heap-dump.
+DEFAULT_HEAP_DUMPER = HeapDumper()
+"""Default instance of class :class:`HeapDumper`
 
-    This function creates a Python dump. The dump contains various
-    informations about the currently executing Python program:
+Used by the functions :func:`save_dump` and :func:`create_dump`"""
 
-     * exception information
-     * threads
-     * tasklets
-
-    The exact content depends on the function arguments.
-
-    This function tries to prevent thread context switches during the creation of the
-    dump. On Stackless it uses the tasklet flag :attr:`~stackless.tasklet.atomic`. Otherwise
-    it temporarily manipulates the check-interval. Additionally this function
-    temporarily increases the recursion limit.
-
-    This function will usually be called from an except block to
-    allow post-mortem debugging of a failed process. The function returns
-    a byte string, that can be loaded with :func:`load_dump` or :func:`debug_dump`.
-
-    Arguments
-
-    :param filename: name of the dump-file
-    :type filename: str
-    :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
-        returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
-        exception information to the dump.
-    :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
-        or `None` for all threads (default) or `False` to omit thread information altogether.
-    :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
-    :returns: the compressed pickle of the dump.
-    :rtype: str
-    """
-    with atomic(), high_recusion_limit():
-        return run_in_tasklet(_create_dump_impl, exc_info=exc_info, threads=threads, tasklets=tasklets)
+DEFAULT_FORMATTER = MimeMessageFormatter()
+"""Default formatter."""
 
 
-def _create_dump_impl(exc_info=None, threads=None, tasklets=None, current_tasklet=None):
-    """
-    Implementation of :func:`create_dump`.
-    """
-    with atomic(), high_recusion_limit():
-        files = {}
-        dump = {'dump_version': DUMP_VERSION, 'files': files}
-        # add exception information
-        if exc_info is not False:
-            if exc_info is None:
-                exc_info = sys.exc_info()
-            dump['exception_class'] = exc_info[0]
-            dump['exception'] = exc_info[1]
-            dump['traceback'] = exc_info[2]
-            _get_traceback_files(exc_info[2], files=files)
-
-        # add threads
-        current_thread_id = thread.get_ident()
-        dump['current_thread_id'] = current_thread_id
-        dump['main_thread_id'] = main_thread_id()
-
-        current_frames = sys._current_frames()
-        if threads is None:
-            threads = current_frames.keys()
-        elif isinstance(threads, int):
-            threads = [threads]
-        elif isinstance(threads, (list, tuple, collections.Sequence)):
-            threads = list(threads)
-
-        # add tasklets
-        if isStackless and tasklets is not False:
-            dump['tasklets'] = _collect_tasklets(current_tasklet, threads)
-            if dump['tasklets']:
-                threads = False
-
-        if threads:
-            thread_frames = {}
-            dump['thread_frames'] = thread_frames
-            for tid in threads:
-                try:
-                    frame = current_frames[tid]
-                except KeyError:
-                    pass
-                else:
-                    thread_frames[tid] = frame
-                    _get_frame_files(frame, files)
-                    # del frame
-            del thread_frames
-        del current_frames
-        del exc_info
-
-        try:
-            del files
-            # pickle
-            pt = sPickle.SPickleTools(pickler_class=DumpPickler)
-            with block_trap():
-                return pt.dumps(dump)
-        finally:
-            dump.clear()
+def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None, formatter=None):
+    return DEFAULT_HEAP_DUMPER.save_dump(filename, tb, exc_info, threads, tasklets, headers, formatter)
+save_dump.__doc__ = DEFAULT_HEAP_DUMPER.save_dump.__doc__
 
 
-def _collect_tasklets(current_tasklet, threads):
-    taskletType = stackless.tasklet
-    this_tasklet = stackless.current
-    tasklets = {}
-    for tid in threads:
-        main, current, runcount = stackless.get_thread_info(tid)
-
-        #
-        # find scheduled tasklets
-        #
-        t = current.next
-        if current is this_tasklet:
-            current = current_tasklet
-
-        assert current is not this_tasklet
-        assert main is not this_tasklet
-
-        other = {id(current): current}
-        other[id(main)] = main
-        while t is not None and t is not this_tasklet:
-            oid = id(t)
-            if oid in other:
-                break
-            other[oid] = t
-            t = t.next
-
-        #
-        # Here we could look at other tasklet-holders too
-        #
-
-        tasklets[tid] = (main, current, other)
-    return tasklets
+def create_dump(exc_info=None, threads=None, tasklets=None, headers=None):
+    return DEFAULT_HEAP_DUMPER.create_dump(exc_info, threads, tasklets, headers)
+create_dump.__doc__ = DEFAULT_HEAP_DUMPER.create_dump.__doc__
 
 
 class DumpPickler(sPickle.FailSavePickler):
@@ -506,19 +674,41 @@ def load_dump(filename=None, dump=None):
 
     Arguments
 
-    :param filename: the filename of the heap-dump file.
+    :param filename: the filename of the heap-dump file
     :type filename: str
-    :param dump: The pickled and compressed dump as a byte string or the already
-       unpickled heap dump dictionary. Exactly one of the two arguments *filename*
+    :param dump: The content of a heap-dump file (bytes) or
+       a compressed pickle (bytes, starts with ``b"BZh9"``) or
+       a MIME-message with content type ``application/x.python-heapdump``
+       or the already unpickled heap dump dictionary. Exactly one of the two arguments *filename*
        and *dump* must be given.
-    :type dump: str or dict
+    :type dump: bytes or :class:`~email.message.Message` or dict
     :returns: the preprocessed heap dump dictionary
     :rtype: dict
     """
     if dump is None:
         with open(filename, 'rb') as f:
-            dump = f.read()
-    if isinstance(dump, str):
+            dump = message_from_file(f)
+    elif isinstance(dump, bytes) and not dump.startswith(b"BZh9"):
+        # not a compressed pickle. Perhaps a message
+        dump = message_from_string(dump)
+    if isinstance(dump, message.Message):
+        def handle_payload(msg):
+            if msg.is_multipart():
+                for m in msg.get_payload():
+                    r = handle_payload(m)
+                    if r is not None:
+                        return r
+                return None
+            if msg.get_content_maintype() == "application":
+                subtype = msg.get_content_subtype()
+                if subtype == MimeMessageFormatter.CONTENT_TYPE_HEAPDUMP:
+                    return msg.get_payload(decode=True)
+            return None
+        r = handle_payload(dump)
+        if r is None:
+            raise RuntimeError("Not a pyheapdump IMF message")
+        dump = r
+    if isinstance(dump, bytes):
         dump = sPickle.SPickleTools.loads(dump, unpickler_class=FailSaveUnpickler)
     if 'tasklets' in dump and 'thread_frames' not in dump:
         # Stackless
@@ -610,10 +800,12 @@ def debug_dump(dump_filename, dump=None, post_mortem_func=None):
 
     :param filename: the filename of the heap-dump file.
     :type filename: str
-    :param dump: The pickled and compressed dump as a byte string or the already
-       unpickled heap dump dictionary. Exactly one of the two arguments *filename*
+    :param dump: The content of a heap-dump file (bytes) or
+       a compressed pickle (bytes, starts with ``b"BZh9"``) or
+       a MIME-message with content type ``application/x.python-heapdump``
+       or the already unpickled heap dump dictionary. Exactly one of the two arguments *filename*
        and *dump* must be given.
-    :type dump: str or dict
+    :type dump: bytes or :class:`~email.message.Message` or dict
     :param post_mortem_func: Subject to change. Intentionally not documented.
     :returns: the preprocessed heap dump dictionary
     :rtype: dict

@@ -37,6 +37,8 @@ Create and debug heap dumps.
 
 .. autofunction:: debug_dump
 
+.. autoclass:: MimeMessageFormatter
+
 """
 
 from __future__ import absolute_import, print_function, unicode_literals, division

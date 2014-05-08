@@ -23,6 +23,9 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2014-05-09 Version 0.2:
+ * New dump file format (RFC 2045 MIME-message).
+
 2014-02-11 Version 0.1.1:
 
  * Updated documentation
