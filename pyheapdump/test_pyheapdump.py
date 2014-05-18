@@ -46,7 +46,7 @@ class PyheapdumpTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super(PyheapdumpTest, cls).setUpClass()
-        fd, name = tempfile.mkstemp(suffix="pydump")
+        fd, name = tempfile.mkstemp(suffix=".pydump")
         os.close(fd)
         cls.dump_file_name = name
 
@@ -105,17 +105,22 @@ class PyheapdumpTest(unittest.TestCase):
         _pyheapdump.create_dump(exc_info=False, threads=None, tasklets=None)
         del blocking_obj
 
-    def testLoadDump(self):
+    def _writeDump(self):
         try:
             self.raise_exc()
         except Exception:
             _pyheapdump.save_dump(self.dump_file_name, exc_info=sys.exc_info(), threads=None, tasklets=None)
+
+    def testLoadDump(self):
+        self._writeDump()
         dump = _pyheapdump.load_dump(self.dump_file_name)
         self.assertIsInstance(dump, dict)
         self.assertEqual(dump['dump_version'], _pyheapdump.DUMP_VERSION)
 
     @unittest.skipUnless(RUN_INTERACTIVE_TESTS, "test requires manual interaction (breaks into the debugger)")
     def testDebugDump(self):
+        self._writeDump()
+        print("Debugging dump file: ", self.dump_file_name)
         _pyheapdump.debug_dump(self.dump_file_name)
 
 
