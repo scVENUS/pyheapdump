@@ -107,21 +107,22 @@ else:
     taskletType = stackless.tasklet
     atomic = stackless.atomic
 
+    def _run_in_tasklet_call_func(result, current_tasklet, func, args, kw):
+        try:
+            result.append(func(*args, current_tasklet=current_tasklet, **kw))
+        except Exception:
+            exc_info = sys.exc_info()
+            current_tasklet.throw(exc=exc_info[0], val=exc_info[1], tb=exc_info[2])
+        else:
+            current_tasklet.switch()
+
     def run_in_tasklet(func, *args, **kw):
         current = stackless.current
         result = []
 
-        def call_func():
-            try:
-                result.append(func(*args, current_tasklet=current, **kw))
-            except Exception:
-                exc_info = sys.exc_info()
-                current.throw(exc=exc_info[0], val=exc_info[1], tb=exc_info[2])
-            else:
-                current.switch()
         result.append(stackless.tasklet())
         result[0].set_atomic(True)
-        result.pop().bind(call_func, ()).switch()
+        result.pop().bind(_run_in_tasklet_call_func, (result, current, func, args, kw)).switch()
         return result[0]
 
     @contextlib.contextmanager

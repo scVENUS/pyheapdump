@@ -119,7 +119,7 @@ class PyheapdumpTest(unittest.TestCase):
 
     @unittest.skipUnless(RUN_INTERACTIVE_TESTS, "test requires manual interaction (breaks into the debugger)")
     def testDebugDump(self):
-        self._writeDump()
+        apply(self._writeDump)
         print("Debugging dump file: ", self.dump_file_name)
         _pyheapdump.debug_dump(self.dump_file_name)
 
