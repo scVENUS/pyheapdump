@@ -219,7 +219,7 @@ class HeapDumper(object):
         :param filename: name of the dump-file
         :type filename: str
         :param exc_info: optional exception info tuple as returned by :func:`sys.exc_info`. If set to `None`, the value
-            returned by :func:`sys.exc_info` will be used. If set to `True`, :func:`save_dump` does not add
+            returned by :func:`sys.exc_info` will be used. If set to `False`, :func:`save_dump` does not add
             exception information to the dump.
         :param threads: A single thread id (type is `int`) or a sequence of thread ids (type is :class:`collections.Sequence`)
             or `None` for all threads (default) or `False` to omit thread information altogether.
