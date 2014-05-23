@@ -301,7 +301,7 @@ class HeapDumper(object):
 
     def _collect_tasklets(self, current_tasklet, threads):
         taskletType = stackless.tasklet
-        this_tasklet = stackless.current
+        this_tasklet = stackless.current  # @UndefinedVariable
         tasklets = {}
         for tid in threads:
             main, current, runcount = stackless.get_thread_info(tid)
@@ -558,7 +558,7 @@ class TaskletReplacement(object):
 
     def __reduce__(self):
         tasklet = self.tasklet
-        if tasklet is stackless.current:
+        if tasklet is stackless.current:  # @UndefinedVariable
             raise pickle.PickleError("Can't pickle the current tasklet")
         try:
             return tasklet.__reduce__()
@@ -666,7 +666,7 @@ def _safe_repr(v):
         return "repr error: " + str(e)
 
 
-def load_dump(filename=None, dump=None):
+def load_dump(dumpfile=None, dump=None):
     """
     Load a Python heap dump
 
@@ -675,20 +675,23 @@ def load_dump(filename=None, dump=None):
 
     Arguments
 
-    :param filename: the filename of the heap-dump file
-    :type filename: str
+    :param dumpfile: the name of the heap-dump file or a file-like object open for reading bytes.
+    :type dumpfile: str or file-like
     :param dump: The content of a heap-dump file (bytes) or
        a compressed pickle (bytes, starts with ``b"BZh9"``) or
        a MIME-message with content type ``application/x.python-heapdump``
-       or the already unpickled heap dump dictionary. Exactly one of the two arguments *filename*
+       or the already unpickled heap dump dictionary. Exactly one of the two arguments *dumpfile*
        and *dump* must be given.
     :type dump: bytes or :class:`~email.message.Message` or dict
     :returns: the preprocessed heap dump dictionary
     :rtype: dict
     """
     if dump is None:
-        with open(filename, 'rb') as f:
-            dump = message_from_file(f)
+        if isinstance(dumpfile, basestring):
+            with open(dumpfile, 'rb') as f:
+                dump = message_from_file(f)
+        else:
+            dump = message_from_file(dumpfile)
     elif isinstance(dump, bytes) and not dump.startswith(b"BZh9"):
         # not a compressed pickle. Perhaps a message
         dump = message_from_string(dump)
@@ -778,7 +781,76 @@ def load_dump(filename=None, dump=None):
     return dump
 
 
-def debug_dump(dump_filename, dump=None, post_mortem_func=None):
+def invoke_pdb(dump, debugger_options):
+    import pdb
+    pdb.post_mortem(dump['traceback'])
+
+def invoke_pydevd(dump, debugger_options):
+    import pydevd  # @UnresolvedImport
+    from pydevd_custom_frames import addCustomFrame  # @UnresolvedImport
+
+    current_thread_id = thread.get_ident()
+    current_thread = threading.current_thread()
+    pydevd.settrace(host=debugger_options.get('host'),
+                    port=debugger_options.get('port'),
+                    stdoutToServer=debugger_options.get('stdout') == 'server',
+                    stderrToServer=debugger_options.get('stderr') == 'server',
+                    suspend=False, trace_only_current_thread=True)
+
+    ctid = dump.get('current_thread_id', 0)
+    mtid = dump.get('main_thread_id', 0)
+
+    if dump.get('tasklets'):
+        for tid, value in dump['tasklets'].iteritems():
+            tasklet = value[0]
+            if tasklet.frame is not None:
+                addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_main=True, is_current=(tasklet is value[1]),
+                                                            main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+            tasklet = value[1]
+            if tasklet.frame is not None and tasklet is not value[0]:
+                addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_current=True,
+                                                            main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+            for oid, tasklet in value[2].iteritems():
+                if tasklet is value[0] or tasklet is value[1] or tasklet.frame is None:
+                    continue
+                addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid,
+                                                            main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+    elif 'thread_frames' in dump:
+        for tid, frame in dump['thread_frames'].iteritems():
+            addCustomFrame(frame, _thread_name(tid, main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+
+    info = current_thread.additionalInfo
+    tb = dump.get('traceback')
+    frames = []
+    while tb:
+        try:
+            frame = tb.tb_frame
+        except AttributeError:
+            pass
+        else:
+            frames.insert(0, frame)
+        try:
+            tb = tb.tb_next
+        except AttributeError:
+            tb = None
+
+    if frames:
+        frames_byid = {}
+        tb = None
+        frame = frames[0]
+        while frame is not None:
+            frames_byid[id(frame)] = frame
+            frame = frame.f_back
+        frame = frames[0]
+        frames = None
+
+        info.pydev_force_stop_at_exception = (frame, frames_byid)
+        pydevd.GetGlobalDebugger().force_post_mortem_stop += 1
+    else:
+        pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
+
+
+def debug_dump(dumpfile, dump=None, debugger_options=None, invoke_debugger_func=None):
     """
     Load and debug a Python heap dump
 
@@ -795,96 +867,45 @@ def debug_dump(dump_filename, dump=None, post_mortem_func=None):
 
     You can invoke this function directly from your shell::
 
-        $ python -m pyheapdump mydumpfile.pydump
+        $ python -m pyheapdump --help
 
     Arguments
 
-    :param filename: the filename of the heap-dump file.
-    :type filename: str
+    :param dumpfile: the name of the heap-dump file or a file-like object open for reading bytes.
+    :type dumpfile: str or file-like
     :param dump: The content of a heap-dump file (bytes) or
        a compressed pickle (bytes, starts with ``b"BZh9"``) or
        a MIME-message with content type ``application/x.python-heapdump``
        or the already unpickled heap dump dictionary. Exactly one of the two arguments *filename*
        and *dump* must be given.
     :type dump: bytes or :class:`~email.message.Message` or dict
-    :param post_mortem_func: Subject to change. Intentionally not documented.
-    :returns: the preprocessed heap dump dictionary
-    :rtype: dict
+    :param debugger_options: Subject to change. Intentionally not documented.
+    :param invoke_debugger_func: Subject to change. Intentionally not documented.
+
+    :returns: None
     """
-    if post_mortem_func is None:
-        try:
-            import pydevd
-            from pydevd_custom_frames import addCustomFrame
-        except ImportError:
-            import pdb
-            post_mortem_func = lambda d: pdb.post_mortem(d['traceback'])
+    if debugger_options is None:
+        debugger_options = {}
+    if debugger_options.get('debugger_dir') is not None:
+        sys.path.append(debugger_options['debugger_dir'])
+    if invoke_debugger_func is None:
+        if debugger_options.get('debugger') == 'pydevd':
+            invoke_debugger_func = invoke_pydevd
+        elif debugger_options.get('debugger') == 'pdb':
+            invoke_debugger_func = invoke_pdb
         else:
-            def post_mortem_func(dump):
-                current_thread_id = thread.get_ident()
-                current_thread = threading.current_thread()
-                pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=False, trace_only_current_thread=True)
+            try:
+                import pydevd  # @UnusedImport
+            except ImportError:
+                invoke_debugger_func = invoke_pdb
+            else:
+                invoke_debugger_func = invoke_pydevd
 
-                ctid = dump.get('current_thread_id', 0)
-                mtid = dump.get('main_thread_id', 0)
-
-                if dump.get('tasklets'):
-                    for tid, value in dump['tasklets'].iteritems():
-                        tasklet = value[0]
-                        if tasklet.frame is not None:
-                            addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_main=True, is_current=(tasklet is value[1]),
-                                                                        main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
-                        tasklet = value[1]
-                        if tasklet.frame is not None and tasklet is not value[0]:
-                            addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_current=True,
-                                                                        main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
-                        for oid, tasklet in value[2].iteritems():
-                            if tasklet is value[0] or tasklet is value[1] or tasklet.frame is None:
-                                continue
-                            addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid,
-                                                                        main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
-                elif 'thread_frames' in dump:
-                    for tid, frame in dump['thread_frames'].iteritems():
-                        addCustomFrame(frame, _thread_name(tid, main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
-
-                info = current_thread.additionalInfo
-                tb = dump.get('traceback')
-                frames = []
-                while tb:
-                    try:
-                        frame = tb.tb_frame
-                    except AttributeError:
-                        pass
-                    else:
-                        frames.insert(0, frame)
-                    try:
-                        tb = tb.tb_next
-                    except AttributeError:
-                        tb = None
-
-                if frames:
-                    frames_byid = {}
-                    tb = None
-                    frame = frames[0]
-                    while frame is not None:
-                        frames_byid[id(frame)] = frame
-                        frame = frame.f_back
-                    frame = frames[0]
-                    frames = None
-
-                    info.pydev_force_stop_at_exception = (frame, frames_byid)
-                    pydevd.GetGlobalDebugger().force_post_mortem_stop += 1
-                else:
-                    pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
-
-    return _debug_dump_impl(dump_filename, dump, post_mortem_func)
-
-
-def _debug_dump_impl(dump_filename, dump, post_mortem_func):
-    dump = load_dump(filename=dump_filename, dump=dump)
+    dump = load_dump(dumpfile=dumpfile, dump=dump)
     _cache_files(dump['files'])
     _old_checkcache = linecache.checkcache
     linecache.checkcache = lambda filename = None: None
-    post_mortem_func(dump)
+    invoke_debugger_func(dump, debugger_options)
     linecache.checkcache = _old_checkcache
 
 
