@@ -793,7 +793,7 @@ def invoke_pydevd(dump, debugger_options):
     current_thread_id = thread.get_ident()
     current_thread = threading.current_thread()
     pydevd.settrace(host=debugger_options.get('host'),
-                    port=debugger_options.get('port'),
+                    port=debugger_options.get('port', 5678),
                     stdoutToServer=debugger_options.get('stdout') == 'server',
                     stderrToServer=debugger_options.get('stderr') == 'server',
                     suspend=False, trace_only_current_thread=True)
