@@ -413,8 +413,17 @@ class MimeMessageFormatter(object):
         u"id": HEADER_MSGID
     }
 
-    PREAMBLE = b"""This file contains the dump of the internal state of a Python program.
-It helps analysing program failures.
+    HEADER_PREFIX = u'X-python-heapdump-'
+
+    PREAMBLE = b"""This file is a dump of the internal state of a Python program.
+This information helps analysing program failures.
+(Although this file uses the MIME-format, it is not an e-mail message.)
+
+Run
+   python -m pyheapdump [OPTIONS] <path_and_name_of_this_file>
+to inspect this file using eclipse Pydev or pdb. To get help, run
+   python -m pyheapdump --help
+
 """
 
     def __init__(self, ensure_ascii=True, unixfrom=False, preamble=None):
@@ -435,7 +444,8 @@ It helps analysing program failures.
         :rtype: bytes
         """
         msg = multipart.MIMEMultipart("related", type="application/" + self.CONTENT_TYPE_HEAPDUMP)
-        msg.attach(application.MIMEApplication(pickle, self.CONTENT_TYPE_HEAPDUMP))
+        msg2 = application.MIMEApplication(pickle, self.CONTENT_TYPE_HEAPDUMP)
+        msg.attach(msg2)
         msg.preamble = self.PREAMBLE
         for k in sorted(headers):
             v = headers[k]
@@ -445,14 +455,15 @@ It helps analysing program failures.
                 warnings.warn("pyheapdump: ignoring non string header")
                 continue
 
-            k = self.HEADER_NAME_MAPPING.get(k, u'X-python-heapdump-' + k)
+            k = self.HEADER_NAME_MAPPING.get(k, self.HEADER_PREFIX + k)
+            target = msg2 if k.startswith(self.HEADER_PREFIX) else msg
 
             if self._ASCII_HEADER_RE.search(v) is None and v.strip() == v:
-                msg[k] = header.Header(v, maxlinelen=2000000000, header_name=k)
+                target[k] = header.Header(v, maxlinelen=2000000000, header_name=k)
             elif isinstance(v, bytes):
-                msg[k] = header.Header(v, charset="iso-8859-1", header_name=k)
+                target[k] = header.Header(v, charset="iso-8859-1", header_name=k)
             else:
-                msg[k] = header.Header(v.encode("utf-8"), charset="utf-8", header_name=k)
+                target[k] = header.Header(v.encode("utf-8"), charset="utf-8", header_name=k)
         if self.HEADER_DATE not in msg:
             msg[self.HEADER_DATE] = formatdate(localtime=True)
         return msg.as_string(self.unixfrom)
