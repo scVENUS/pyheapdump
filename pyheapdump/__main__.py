@@ -25,7 +25,6 @@ import sys
 from pyheapdump import debug_dump
 
 
-
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
