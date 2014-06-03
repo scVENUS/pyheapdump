@@ -37,12 +37,14 @@ import weakref
 import datetime
 import warnings
 import re
+import logging
 from email import header, message_from_file, message_from_string, message
 from email.mime import application, multipart
 from email.utils import formatdate
 
 import sPickle
 
+LOGGER_NAME = __name__
 
 try:
     from threading import main_thread
@@ -491,7 +493,9 @@ create_dump.__doc__ = DEFAULT_HEAP_DUMPER.create_dump.__doc__
 class DumpPickler(sPickle.FailSavePickler):
 
     def __init__(self, *args, **kw):
-        self.__class__.__bases__[0].__init__(self, *args, **kw)
+        logger = logging.getLogger(LOGGER_NAME).getChild("pickler")
+        logger.setLevel(logging.CRITICAL)
+        self.__class__.__bases__[0].__init__(self, *args, logger=logger, **kw)
         self.dispatch[types.TracebackType] = self.saveTraceback.__func__
         self.dispatch[weakref.ReferenceType] = self.saveWeakref.__func__
         self.__tracebacks = {}

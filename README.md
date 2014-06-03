@@ -24,6 +24,9 @@ Changelog
 ---------
 
 2014-xx-xx Version 0.x:
+ * Disable logging during the creation of the pickle. This prevents secondary errors, if
+   the log system is the cause of heap dump. Requires a new sPickle package.
+
  * Improved readability of the dump file format.
 
  * New command line interface. See "python -m pyheapdump --help" for details.
