@@ -23,6 +23,14 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2014-xx-xx Version 0.x:
+ * Improved readability of the dump file format.
+
+ * New command line interface. See "python -m pyheapdump --help" for details.
+
+ * Work around for Stackless bug #61 while unpickling heap dumps. Previously Stackless
+   used to crash, if you inspect the local variables of certain frames.
+
 2014-05-09 Version 0.2:
  * New dump file format (RFC 2045 MIME-message, content type 'application/x.python-heapdump').
 
