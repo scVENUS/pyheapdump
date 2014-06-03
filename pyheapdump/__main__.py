@@ -21,6 +21,7 @@ from __future__ import absolute_import, print_function, unicode_literals, divisi
 
 import argparse
 import sys
+import os
 
 from pyheapdump import debug_dump
 
@@ -28,9 +29,9 @@ from pyheapdump import debug_dump
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-    parser = argparse.ArgumentParser(description='debug a Python heap dump')
+    parser = argparse.ArgumentParser(description='debug a Python heap dump', prog=os.path.basename(sys.executable) + " -m pyheapdump")
     parser.add_argument('--debugger', '-d', choices=['auto', 'pdb', 'pydevd'], default="auto", help="select the debugger, default is 'auto'")
-    parser.add_argument('--debugger-dir', help='pydevd only: the directory where the debugger is installed')
+    parser.add_argument('--debugger-dir', help='pydevd only: path to the Python files of PyDev, usually <ECLIPSE_INSTALATION_DIR>/plugins/org.python.pydev_<VERSION>/pysrc/')
     parser.add_argument('--host', help='pydevd only: the user may specify another host, if the debug server is not in the same machine')
     parser.add_argument('--port', type=int, default=5678, help='pydevd only: specifies which port to use for communicating with the server. Default is port 5678')
     parser.add_argument('--stdout', choices=['server', 'console'], default='server', help='pydevd only: pass the stdout to the debug server so that it is printed in its console or to this process console')
