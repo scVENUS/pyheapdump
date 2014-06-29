@@ -36,9 +36,15 @@ def main(argv=None):
     parser.add_argument('--port', type=int, default=5678, help='pydevd only: specifies which port to use for communicating with the server. Default is port 5678')
     parser.add_argument('--stdout', choices=['server', 'console'], default='server', help='pydevd only: pass the stdout to the debug server so that it is printed in its console or to this process console')
     parser.add_argument('--stderr', choices=['server', 'console'], default='server', help='pydevd only: pass the stderr to the debug server so that it is printed in its console or to this process console')
+    parser.add_argument('--debug-pyheapdump', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('dumpfile', type=argparse.FileType(mode='rb'), help="the heap dump file")
 
     namespace = parser.parse_args(argv)
+    if namespace.debug_pyheapdump:
+        ###  It is better to use remote debugging, because of the debugger specific code later on
+        sys.path.append(namespace.debugger_dir)
+        import pydevd
+        pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
     return debug_dump(dumpfile=namespace.dumpfile, debugger_options=vars(namespace))
 
 if __name__ == '__main__':
