@@ -24,6 +24,8 @@ Changelog
 ---------
 
 2014-xx-xx Version 0.x:
+ * Rewrite of the thread/tasklet locking to avoid dead locks.
+
  * Disable logging during the creation of the pickle. This prevents secondary errors, if
    the log system is the cause of heap dump. Requires a new sPickle package.
 

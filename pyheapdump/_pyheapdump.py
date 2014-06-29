@@ -89,25 +89,85 @@ except ImportError:
 
     @contextlib.contextmanager
     def atomic():
-        old = sys.getcheckinterval()
-        sys.setcheckinterval(sys.maxint)
-        try:
-            yield
-        finally:
-            sys.setcheckinterval(old)
+        yield
 
     @contextlib.contextmanager
     def block_trap():
-        try:
+        yield
+
+    class _Lock_Status(object):
+        def __init__(self, checkinterval):
+            self.checkinterval = checkinterval
+            self.is_locked = True
+
+        def __call__(self):
+            return self
+
+        def unlock(self):
+            if self.is_locked:
+                self.is_locked = False
+                sys.setcheckinterval(self.checkinterval)
+
+        @contextlib.contextmanager
+        def context_with_io(self):
+            sys.setcheckinterval(self.checkinterval)
+            self.is_locked = False
             yield
-        finally:
-            pass
+
+# A variant with the gil_hacks context manager.
+# Unfortunately, this requires a modified python
+#         @contextlib.contextmanager
+#         def context_with_io(self):
+#             if use_gil_atomic:
+#                 mgr = gil_hacks_atomic
+#             else:
+#                 mgr = null_gil_hacks_atomic
+#             mgr = mgr(sys.getcheckinterval())
+#             __exit__ = mgr.__exit__
+#             mgr.__enter__()
+#             try:
+#                 yield
+#             except:
+#                 __exit__(*sys.exc_info())
+#                 raise
+#             else:
+#                 __exit__(None, None, None)
+
+    def lock_function(getcheckinterval=sys.getcheckinterval, setcheckinterval=sys.setcheckinterval, maxint=sys.maxint):
+        # create an atomic context
+        old_value = getcheckinterval()
+        setcheckinterval(maxint)
+        return _Lock_Status(old_value)
+
 
 else:
     isStackless = True
 
     taskletType = stackless.tasklet
     atomic = stackless.atomic
+
+    class _Stackless_Lock_Status(object):
+        def __init__(self, is_atomic):
+            self.is_atomic = is_atomic
+            self.is_locked = True
+
+        def __call__(self):
+            return self
+
+        def unlock(self):
+            if self.is_locked:
+                self.is_locked = False
+                stackless.current.set_atomic(self.is_atomic)
+
+        @contextlib.contextmanager
+        def context_with_io(self):
+            self.unlock()
+            yield
+
+    def lock_function():
+        # create an atomic context
+        old_value = stackless.current.set_atomic(1)
+        return _Stackless_Lock_Status(old_value)
 
     def _run_in_tasklet_call_func(result, current_tasklet, func, args, kw):
         try:
@@ -148,7 +208,9 @@ def high_recusion_limit(factor=4):
 
 # API
 class HeapDumper(object):
-    def save_dump(self, filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None, formatter=None):
+    def save_dump(self, filename, tb=None, exc_info=None, threads=None,
+                  tasklets=None, headers=None, formatter=None,
+                  lock_function=lock_function):
         """
         Create and save a Python heap-dump.
 
@@ -181,10 +243,13 @@ class HeapDumper(object):
                           bytes of the heap dump file. See :class:`MimeMessageFormatter` for an example.
         :returns: `None`.
         """
-        with atomic():
+        lock_function = lock_function()
+        try:
             if tb is not None and exc_info is None:
                 exc_info = (None, None, tb)
-            pickle, headers = self.create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets, headers=headers)
+            pickle, headers = self.create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets,
+                                               headers=headers,
+                                               lock_function=lock_function)
             if formatter is None:
                 formatter = DEFAULT_FORMATTER
             try:
@@ -194,8 +259,11 @@ class HeapDumper(object):
                     return f.write(formatter(pickle, headers))
             else:
                 return write(formatter(pickle, headers))
+        finally:
+            lock_function.unlock()
 
-    def create_dump(self, exc_info=None, threads=None, tasklets=None, headers=None):
+    def create_dump(self, exc_info=None, threads=None, tasklets=None, headers=None,
+                    lock_function=lock_function):
         """
         Create a Python heap-dump.
 
@@ -232,81 +300,112 @@ class HeapDumper(object):
         :returns: the compressed pickle of the heap-dump, the updated headers collection
         :rtype: tuple
         """
-        with atomic(), high_recusion_limit():
-            return run_in_tasklet(self._create_dump_impl, exc_info=exc_info, threads=threads, tasklets=tasklets, headers=headers)
+        lock_function = lock_function()
+        try:
+            with high_recusion_limit():
+                return run_in_tasklet(self._create_dump_impl, exc_info=exc_info, threads=threads,
+                                      tasklets=tasklets, headers=headers,
+                                      lock_function=lock_function)
+        finally:
+            lock_function.unlock()
 
-    def _create_dump_impl(self, exc_info=None, threads=None, tasklets=None, current_tasklet=None, headers=None):
+    def _create_dump_impl(self, exc_info=None, threads=None, tasklets=None, current_tasklet=None,
+                          headers=None, lock_function=lock_function):
         """
         Implementation of :func:`create_dump`.
         """
-        with atomic(), high_recusion_limit():
-            files = {}
-            dump = {'dump_version': DUMP_VERSION, 'files': files}
-            # add exception information
-            if exc_info is not False:
-                if exc_info is None:
-                    exc_info = sys.exc_info()
-                dump['exception_class'] = exc_info[0]
-                dump['exception'] = exc_info[1]
-                dump['traceback'] = exc_info[2]
-                _get_traceback_files(exc_info[2], files=files)
+        lock_function = lock_function()
 
-            # add threads
-            current_thread_id = thread.get_ident()
-            dump['current_thread_id'] = current_thread_id
-            dump['main_thread_id'] = main_thread_id()
+        try:
+            with atomic(), high_recusion_limit():
+                files = {}
+                memo = {}
+                dump = {'dump_version': DUMP_VERSION, 'files': files}
+                # add exception information
+                if exc_info is not False:
+                    if exc_info is None:
+                        exc_info = sys.exc_info()
+                    dump['exception_class'] = exc_info[0]
+                    dump['exception'] = exc_info[1]
+                    dump['traceback'] = FakeTraceback.for_tb(exc_info[2], memo)
 
-            current_frames = sys._current_frames()
-            if threads is None:
-                threads = current_frames.keys()
-            elif isinstance(threads, int):
-                threads = [threads]
-            elif isinstance(threads, (list, tuple, collections.Sequence)):
-                threads = list(threads)
+                # add threads
+                current_thread_id = thread.get_ident()
+                dump['current_thread_id'] = current_thread_id
+                dump['main_thread_id'] = main_thread_id()
 
-            # add tasklets
-            if isStackless and tasklets is not False:
-                dump['tasklets'] = self._collect_tasklets(current_tasklet, threads)
-                if dump['tasklets']:
-                    threads = False
+                current_frames = sys._current_frames()
+                if threads is None:
+                    threads = current_frames.keys()
+                elif isinstance(threads, int):
+                    threads = [threads]
+                elif isinstance(threads, (list, tuple, collections.Sequence)):
+                    threads = list(threads)
 
-            if threads:
-                thread_frames = {}
-                dump['thread_frames'] = thread_frames
-                for tid in threads:
+                # add tasklets
+                if isStackless and tasklets is not False:
+                    dump['tasklets'] = self._collect_tasklets(current_tasklet, threads, memo)
+                    if dump['tasklets']:
+                        threads = False
+
+                if threads:
+                    thread_frames = {}
+                    dump['thread_frames'] = thread_frames
+                    for tid in threads:
+                        try:
+                            frame = current_frames[tid]
+                        except KeyError:
+                            pass
+                        else:
+                            thread_frames[tid] = FakeFrame.for_frame(frame, memo)
+                            # del frame
+                    del thread_frames
+                del memo
+                # unlock threads. No operation, that might release the GIL before this point !!!
+                with lock_function.context_with_io():
+
+                    # get files for frames
+                    if 'traceback' in dump:
+                        _get_traceback_files(dump['traceback'], files=files)
+                    d = dump.get('thread_frames', ())
+                    for tid in d:
+                        _get_frame_files(d[tid], files=files)
+                    d = dump.get('tasklets', ())
+                    for tid in d:
+                        main, current, other = d[tid]
+                        _get_tasklet_files(main, files=files)
+                        _get_tasklet_files(current, files=files)
+                        for t in other.values():
+                            _get_tasklet_files(t, files=files)
+
+                    d = main = current = other = t = None
+
+                    del current_frames
+                    del exc_info
+                    del files
+
                     try:
-                        frame = current_frames[tid]
-                    except KeyError:
-                        pass
-                    else:
-                        thread_frames[tid] = frame
-                        _get_frame_files(frame, files)
-                        # del frame
-                del thread_frames
-            del current_frames
-            del exc_info
+                        # pickle
+                        pt = sPickle.SPickleTools(pickler_class=DumpPickler)
+                        with block_trap():
+                            pickle = pt.dumps(dump)
+                        pt = None
 
-            try:
-                del files
-                # pickle
-                pt = sPickle.SPickleTools(pickler_class=DumpPickler)
-                with block_trap():
-                    pickle = pt.dumps(dump)
-                pt = None
+                        if headers is None:
+                            headers = {}
+                        headers = self.fill_headers(headers, dump, pickle)
+                        return pickle, headers
+                    finally:
+                        dump.clear()
+        finally:
+            lock_function.unlock()
 
-                if headers is None:
-                    headers = {}
-                headers = self.fill_headers(headers, dump, pickle)
-            finally:
-                dump.clear()
-        return pickle, headers
-
-    def _collect_tasklets(self, current_tasklet, threads):
+    def _collect_tasklets(self, current_tasklet, threads, memo):
         taskletType = stackless.tasklet
         this_tasklet = stackless.current  # @UndefinedVariable
         tasklets = {}
         for tid in threads:
-            main, current, runcount = stackless.get_thread_info(tid)
+            main, current = stackless.get_thread_info(tid)[:2]
 
             #
             # find scheduled tasklets
@@ -318,13 +417,17 @@ class HeapDumper(object):
             assert current is not this_tasklet
             assert main is not this_tasklet
 
+            current = FakeTasklet.for_tasklet(current, memo)
+            main = FakeTasklet.for_tasklet(main, memo)
+
             other = {id(current): current}
             other[id(main)] = main
             while t is not None and t is not this_tasklet:
-                oid = id(t)
+                fake = FakeTasklet.for_tasklet(t, memo)
+                oid = id(fake)
                 if oid in other:
                     break
-                other[oid] = t
+                other[oid] = fake
                 t = t.next
 
             #
@@ -480,13 +583,15 @@ DEFAULT_FORMATTER = MimeMessageFormatter()
 """Default formatter."""
 
 
-def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None, formatter=None):
-    return DEFAULT_HEAP_DUMPER.save_dump(filename, tb, exc_info, threads, tasklets, headers, formatter)
+def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None, formatter=None, lock_function=lock_function):
+    lock_function = lock_function()
+    return DEFAULT_HEAP_DUMPER.save_dump(filename, tb, exc_info, threads, tasklets, headers, formatter, lock_function=lock_function)
 save_dump.__doc__ = DEFAULT_HEAP_DUMPER.save_dump.__doc__
 
 
-def create_dump(exc_info=None, threads=None, tasklets=None, headers=None):
-    return DEFAULT_HEAP_DUMPER.create_dump(exc_info, threads, tasklets, headers)
+def create_dump(exc_info=None, threads=None, tasklets=None, headers=None, lock_function=lock_function):
+    lock_function = lock_function()
+    return DEFAULT_HEAP_DUMPER.create_dump(exc_info, threads, tasklets, headers, lock_function=lock_function)
 create_dump.__doc__ = DEFAULT_HEAP_DUMPER.create_dump.__doc__
 
 
@@ -596,12 +701,55 @@ class TaskletReplacement(object):
 
 
 class FakeClass(object):
-    def __init__(self, repr, vars):
-        self.__repr = repr
-        self.__dict__.update(vars)
+    def __init__(self, repr_, vars_):
+        self.__repr = repr_
+        self.__dict__.update(vars_)
 
     def __repr__(self):
         return self.__repr
+
+
+class FakeTasklet(object):
+    __slots__ = ('alive', 'paused', 'blocked', 'scheduled', 'restorable',
+                 'atomic', 'ignore_nesting', 'block_trap',
+                 'is_current', 'is_main', 'thread_id',
+                 'prev', 'next',
+                 'tempval', 'nesting_level', 'frame')
+
+    @classmethod
+    def for_tasklet(cls, tasklet, memo):
+        if tasklet is None or isinstance(tasklet, FakeTasklet):
+            return tasklet
+        oid = id(tasklet)
+        try:
+            return memo[oid]
+        except KeyError:
+            fake_tasklet = cls()
+            memo[oid] = fake_tasklet
+            fake_tasklet.alive = tasklet.alive
+            fake_tasklet.paused = tasklet.paused
+            fake_tasklet.blocked = tasklet.blocked
+            fake_tasklet.scheduled = tasklet.scheduled
+            fake_tasklet.restorable = tasklet.restorable
+            fake_tasklet.atomic = tasklet.atomic
+            fake_tasklet.ignore_nesting = tasklet.ignore_nesting
+            fake_tasklet.block_trap = tasklet.block_trap
+            fake_tasklet.is_current = tasklet.is_current
+            fake_tasklet.is_main = tasklet.is_main
+            fake_tasklet.thread_id = tasklet.thread_id
+            fake_tasklet.prev = cls.for_tasklet(tasklet.prev, memo)
+            fake_tasklet.next = cls.for_tasklet(tasklet.next, memo)
+            fake_tasklet.nesting_level = tasklet.nesting_level
+            fake_tasklet.frame = FakeFrame.for_frame(tasklet.frame, memo)
+            tmp = tasklet.tempval
+            if isinstance(tmp, stackless.tasklet):
+                tmp = cls.for_tasklet(tmp, memo)
+            elif isinstance(tmp, types.FrameType):
+                tmp = FakeFrame.for_frame(tmp, memo)
+            elif isinstance(tmp, types.TracebackType):
+                tmp = FakeTraceback.for_tb(tmp, memo)
+            fake_tasklet.tempval = tmp
+            return fake_tasklet
 
 
 class FakeFrame(object):
@@ -610,8 +758,8 @@ class FakeFrame(object):
 
     @classmethod
     def for_frame(cls, frame, memo):
-        if frame is None:
-            return None
+        if frame is None or isinstance(frame, FakeFrame):
+            return frame
         oid = id(frame)
         try:
             return memo[oid]
@@ -638,8 +786,8 @@ class FakeTraceback(object):
 
     @classmethod
     def for_tb(cls, traceback, memo):
-        if traceback is None:
-            return None
+        if traceback is None or isinstance(traceback, FakeTraceback):
+            return traceback
         oid = id(traceback)
         try:
             return memo[oid]
@@ -651,6 +799,17 @@ class FakeTraceback(object):
             fake_tb.tb_lineno = traceback.tb_lineno
             fake_tb.tb_next = cls.for_tb(traceback.tb_next, memo)
             return fake_tb
+
+
+def _get_tasklet_files(tasklet, files=None):
+    try:
+        frame = tasklet.frame
+    except AttributeError:
+        if files is None:
+            files = {}
+        return files  # not a tasklet
+    else:
+        return _get_frame_files(frame, files)
 
 
 def _get_traceback_files(traceback, files=None):
@@ -826,7 +985,8 @@ def invoke_pydevd(dump, debugger_options):
             if tasklet.frame is not None and tasklet is not value[0]:
                 addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_current=True,
                                                             main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
-            for oid, tasklet in value[2].iteritems():
+            for oid in value[2]:
+                tasklet = value[2][oid]
                 if tasklet is value[0] or tasklet is value[1] or tasklet.frame is None:
                     continue
                 addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid,
