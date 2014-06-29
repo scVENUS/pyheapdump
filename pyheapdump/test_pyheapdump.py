@@ -28,7 +28,7 @@ import threading
 import io
 RUN_INTERACTIVE_TESTS = os.environ.get('RUN_INTERACTIVE_TESTS')
 
-from . import _pyheapdump
+from pyheapdump import _pyheapdump
 
 
 class BlockingPickle(object):
