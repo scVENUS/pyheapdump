@@ -1,0 +1,7 @@
+# This path configuration file installs a sys.excepthook handler
+# that writes a pyheapdump on an otherwise unhandled exception.
+# 
+# To get more information about "path configuration files" (*.pth), read 
+# the comments in the Python library module site.py.
+#
+import pyheapdump ; pyheapdump.dump_on_unhandled_exceptions()
