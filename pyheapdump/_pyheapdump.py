@@ -20,7 +20,8 @@ from __future__ import absolute_import, print_function, unicode_literals, divisi
 
 DUMP_VERSION = 2
 # for now we export just a limited set of symbols.
-__all__ = ('save_dump', 'create_dump', 'load_dump', 'debug_dump', 'MimeMessageFormatter')
+__all__ = ('save_dump', 'create_dump', 'load_dump',
+           'debug_dump', 'MimeMessageFormatter', 'dump_on_unhandled_exceptions')
 
 import os
 import sys
@@ -38,6 +39,8 @@ import datetime
 import warnings
 import re
 import logging
+import tempfile
+import functools
 from email import header, message_from_file, message_from_string, message
 from email.mime import application, multipart
 from email.utils import formatdate
@@ -1232,3 +1235,91 @@ class FailSaveUnpickler(pickle.Unpickler):
         except Exception:
             self.on_exception("assignments ignored")
     dispatch[pickle.BUILD] = load_build
+
+DEFAULT_ON_UNHANDLED_EXCEPTION_MESSAGE = """Traceback (most recent call last):
+{traceback}
+{exctype.__name__}: {excvalue}
+
+This program (or thread) terminated abnormal. A Python heap dump has been saved under:
+
+  {dumpfile}
+
+The developer of this program can use the dump to analyse the failure.
+"""
+
+
+def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, reraise=None, daisy_chain_sys_excepthook=None):
+    """
+    Create a heap dump for each unhandled exception.
+
+    This function registers a sys.excepthook handler that
+    creates heap dumps on otherwise unhandled exceptions.
+
+    :param dump_dir: the directory where to create the dump. If
+      set to `None`, the dump is created in the directory given by
+      :func:`tempfile.gettempdir()`.
+    :type dump_dir: a string.
+    :param daisy_chain_sys_excepthook: if true, daisy chain the original sys.excepthook handler.
+    :type daisy_chain_sys_excepthook: bool
+    :param message: a message to print on sys.stderr.
+    :type message: string
+    """
+    if message is None:
+        message = DEFAULT_ON_UNHANDLED_EXCEPTION_MESSAGE
+
+    if dump_dir is not None and not os.path.isdir(dump_dir):
+        dump_dir = None
+    if dump_dir is None:
+        dump_dir = tempfile.gettempdir()
+    dump_dir = os.path.abspath(dump_dir)
+
+    filename = os.path.basename('python_heap_' + str(os.getpid())) + os.path.extsep + 'dump'
+    name_and_path = os.path.join(dump_dir, filename)
+
+    if function is not None:
+        # Used as a decorator/wrapper
+        @functools.wraps(function)
+        def _dump_on_unhandled_exceptions_wrapper(*args, **kw):
+            try:
+                return function(*args, **kw)
+            except Exception:
+                try:
+                    try:
+                        lf = lock_function()
+                        exctype, value, traceback_ = sys.exc_info()
+                        save_dump(name_and_path, exc_info=(exctype, value, traceback_), lock_function=lf)
+                        if message:
+                            print(message.format(exctype=exctype, excvalue=value,
+                                                 traceback="".join(traceback.format_tb(traceback_))[:-1],
+                                                 dumpfile=name_and_path, dump_dir=dump_dir,
+                                                 dump_base_name=filename),
+                                  file=sys.stderr)
+                    except Exception:
+                        traceback.print_exc()
+                finally:
+                    if reraise:
+                        raise
+        return _dump_on_unhandled_exceptions_wrapper
+
+    # set sys.exepthook
+    orig_excepthook = sys.excepthook
+
+    def excepthook(exctype, value, traceback_):
+        with atomic():
+            ok = False
+            sys.excepthook = orig_excepthook
+            try:
+                save_dump(name_and_path, exc_info=(exctype, value, traceback_))
+                ok = True
+            finally:
+                sys.excepthook = excepthook
+        if ok and message:
+            print(message.format(exctype=exctype, excvalue=value,
+                                 traceback="".join(traceback.format_tb(traceback_))[:-1],
+                                 dumpfile=name_and_path, dump_dir=dump_dir,
+                                 dump_base_name=filename),
+                  file=sys.stderr)
+        if daisy_chain_sys_excepthook:
+            orig_excepthook(exctype, value, traceback)
+    sys.excepthook = excepthook
+    return None

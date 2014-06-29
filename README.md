@@ -24,6 +24,9 @@ Changelog
 ---------
 
 2014-xx-xx Version 0.x:
+ * New function dump_on_unhandled_exceptions. It can be used as a 
+   function decorator or to setup a sys.execpthook handler.
+
  * Rewrite of the thread/tasklet locking to avoid dead locks.
 
  * Disable logging during the creation of the pickle. This prevents secondary errors, if
