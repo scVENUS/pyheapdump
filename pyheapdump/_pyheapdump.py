@@ -78,6 +78,55 @@ else:
 main_thread_id = _build()
 del _build
 
+
+class _Lock_Status_Base(object):
+    iolock = threading.RLock()
+
+    def __init__(self):
+        self.is_locked = True
+        self.has_io_lock = False
+
+    def __call__(self):
+        return self
+
+    def unlock(self):
+        if self.is_locked:
+            self.is_locked = False
+            self._unlock()
+        if self.has_io_lock:
+            self.has_io_lock = False
+            self.iolock.release()
+
+    @contextlib.contextmanager
+    def context_with_io(self):
+        has_io_lock = self.iolock.acquire(blocking=False)
+        self.has_io_lock = has_io_lock
+        self._unlock()
+        if not has_io_lock:
+            self.iolock.acquire(blocking=True)
+            self.has_io_lock = True
+        self.is_locked = False
+        yield
+
+# A variant with the gil_hacks context manager.
+# Unfortunately, this requires a modified python
+#     @contextlib.contextmanager
+#     def context_with_io(self):
+#         if use_gil_atomic:
+#             mgr = gil_hacks_atomic
+#         else:
+#             mgr = null_gil_hacks_atomic
+#         mgr = mgr(sys.getcheckinterval())
+#         __exit__ = mgr.__exit__
+#         mgr.__enter__()
+#         try:
+#             yield
+#         except:
+#             __exit__(*sys.exc_info())
+#             raise
+#         else:
+#             __exit__(None, None, None)
+
 try:
     import stackless
 except ImportError:
@@ -98,43 +147,13 @@ except ImportError:
     def block_trap():
         yield
 
-    class _Lock_Status(object):
+    class _Lock_Status(_Lock_Status_Base):
         def __init__(self, checkinterval):
+            super(_Lock_Status, self).__init__()
             self.checkinterval = checkinterval
-            self.is_locked = True
 
-        def __call__(self):
-            return self
-
-        def unlock(self):
-            if self.is_locked:
-                self.is_locked = False
-                sys.setcheckinterval(self.checkinterval)
-
-        @contextlib.contextmanager
-        def context_with_io(self):
+        def _unlock(self):
             sys.setcheckinterval(self.checkinterval)
-            self.is_locked = False
-            yield
-
-# A variant with the gil_hacks context manager.
-# Unfortunately, this requires a modified python
-#         @contextlib.contextmanager
-#         def context_with_io(self):
-#             if use_gil_atomic:
-#                 mgr = gil_hacks_atomic
-#             else:
-#                 mgr = null_gil_hacks_atomic
-#             mgr = mgr(sys.getcheckinterval())
-#             __exit__ = mgr.__exit__
-#             mgr.__enter__()
-#             try:
-#                 yield
-#             except:
-#                 __exit__(*sys.exc_info())
-#                 raise
-#             else:
-#                 __exit__(None, None, None)
 
     def lock_function(getcheckinterval=sys.getcheckinterval, setcheckinterval=sys.setcheckinterval, maxint=sys.maxint):
         # create an atomic context
@@ -142,30 +161,19 @@ except ImportError:
         setcheckinterval(maxint)
         return _Lock_Status(old_value)
 
-
 else:
     isStackless = True
 
     taskletType = stackless.tasklet
     atomic = stackless.atomic
 
-    class _Stackless_Lock_Status(object):
+    class _Stackless_Lock_Status(_Lock_Status_Base):
         def __init__(self, is_atomic):
+            super(_Stackless_Lock_Status, self).__init__()
             self.is_atomic = is_atomic
-            self.is_locked = True
 
-        def __call__(self):
-            return self
-
-        def unlock(self):
-            if self.is_locked:
-                self.is_locked = False
-                stackless.current.set_atomic(self.is_atomic)
-
-        @contextlib.contextmanager
-        def context_with_io(self):
-            self.unlock()
-            yield
+        def _unlock(self):
+            stackless.current.set_atomic(self.is_atomic)
 
     def lock_function():
         # create an atomic context
@@ -211,6 +219,13 @@ def high_recusion_limit(factor=4):
 
 # API
 class HeapDumper(object):
+    sequence_number = -1
+
+    @classmethod
+    def next_sequence_number(cls):
+        cls.sequence_number += 1
+        return cls.sequence_number
+
     def save_dump(self, filename, tb=None, exc_info=None, threads=None,
                   tasklets=None, headers=None, formatter=None,
                   lock_function=lock_function):
@@ -253,15 +268,23 @@ class HeapDumper(object):
             pickle, headers = self.create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets,
                                                headers=headers,
                                                lock_function=lock_function)
+            try:
+                sequence_number = headers['sequence_number']
+            except Exception:
+                sequence_number = '0'
+            if isinstance(filename, basestring) and '{sequence_number}' in filename:
+                filename = filename.replace('{sequence_number}', sequence_number)
+
             if formatter is None:
                 formatter = DEFAULT_FORMATTER
             try:
                 write = filename.write
             except AttributeError:
                 with open(filename, 'wb') as f:
-                    return f.write(formatter(pickle, headers))
+                    f.write(formatter(pickle, headers))
             else:
-                return write(formatter(pickle, headers))
+                write(formatter(pickle, headers))
+            return filename, headers
         finally:
             lock_function.unlock()
 
@@ -321,9 +344,14 @@ class HeapDumper(object):
 
         try:
             with atomic(), high_recusion_limit():
+                sequence_number = self.next_sequence_number()
+                pid = os.getpid()
                 files = {}
                 memo = {}
-                dump = {'dump_version': DUMP_VERSION, 'files': files}
+                dump = {'dump_version': DUMP_VERSION,
+                        'files': files,
+                        'sequence_number': sequence_number,
+                        'pid': pid}
                 # add exception information
                 if exc_info is not False:
                     if exc_info is None:
@@ -482,7 +510,9 @@ class HeapDumper(object):
         if 'utcnow' not in headers:
             headers['utcnow'] = datetime.datetime.utcnow().isoformat()
         if 'pid' not in headers:
-            headers['pid'] = str(os.getpid())
+            headers['pid'] = str(dump['pid'])
+        if 'sequence_number' not in headers:
+            headers['sequence_number'] = str(dump['sequence_number'])
         if 'sys_version_info' not in headers:
             headers['sys_version_info'] = repr(sys.version_info)
         if 'sys_flags' not in headers:
@@ -1273,7 +1303,7 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
         dump_dir = tempfile.gettempdir()
     dump_dir = os.path.abspath(dump_dir)
 
-    filename = os.path.basename('python_heap_' + str(os.getpid())) + os.path.extsep + 'dump'
+    filename = os.path.basename('python_heap_' + str(os.getpid())) + '_{sequence_number}_' + os.path.extsep + 'dump'
     name_and_path = os.path.join(dump_dir, filename)
 
     if function is not None:
@@ -1287,11 +1317,11 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
                     try:
                         lf = lock_function()
                         exctype, value, traceback_ = sys.exc_info()
-                        save_dump(name_and_path, exc_info=(exctype, value, traceback_), lock_function=lf)
+                        name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_), lock_function=lf)[0]
                         if message:
                             print(message.format(exctype=exctype, excvalue=value,
                                                  traceback="".join(traceback.format_tb(traceback_))[:-1],
-                                                 dumpfile=name_and_path, dump_dir=dump_dir,
+                                                 dumpfile=name_and_path2, dump_dir=dump_dir,
                                                  dump_base_name=filename),
                                   file=sys.stderr)
                     except Exception:
@@ -1309,14 +1339,14 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
             ok = False
             sys.excepthook = orig_excepthook
             try:
-                save_dump(name_and_path, exc_info=(exctype, value, traceback_))
+                name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_))[0]
                 ok = True
             finally:
                 sys.excepthook = excepthook
         if ok and message:
             print(message.format(exctype=exctype, excvalue=value,
                                  traceback="".join(traceback.format_tb(traceback_))[:-1],
-                                 dumpfile=name_and_path, dump_dir=dump_dir,
+                                 dumpfile=name_and_path2, dump_dir=dump_dir,
                                  dump_base_name=filename),
                   file=sys.stderr)
         if daisy_chain_sys_excepthook:
