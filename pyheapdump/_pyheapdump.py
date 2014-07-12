@@ -1339,21 +1339,22 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
     orig_excepthook = sys.excepthook
 
     def excepthook(exctype, value, traceback_):
-        with atomic():
-            ok = False
-            sys.excepthook = orig_excepthook
-            try:
-                name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_))[0]
-                ok = True
-            finally:
-                sys.excepthook = excepthook
-        if ok and message:
-            print(message.format(exctype=exctype, excvalue=value,
-                                 traceback="".join(traceback.format_tb(traceback_))[:-1],
-                                 dumpfile=name_and_path2, dump_dir=dump_dir,
-                                 dump_base_name=filename),
-                  file=sys.stderr)
-        if daisy_chain_sys_excepthook:
+        if isinstance(value, Exception):
+            with atomic():
+                ok = False
+                sys.excepthook = orig_excepthook
+                try:
+                    name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_))[0]
+                    ok = True
+                finally:
+                    sys.excepthook = excepthook
+            if ok and message:
+                print(message.format(exctype=exctype, excvalue=value,
+                                     traceback="".join(traceback.format_tb(traceback_))[:-1],
+                                     dumpfile=name_and_path2, dump_dir=dump_dir,
+                                     dump_base_name=filename),
+                      file=sys.stderr)
+        if daisy_chain_sys_excepthook and callable(orig_excepthook):
             orig_excepthook(exctype, value, traceback)
     sys.excepthook = excepthook
     return None
