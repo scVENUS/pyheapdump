@@ -23,14 +23,21 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
-2014-xx-xx Version 0.x:
+2014-07-12 Version 0.2.1:
+
+ * Work around Python bug http://bugs.python.org/issue21967. It used to 
+   crash the Python interpreter under certain conditions.
+
+ * Added examples in the directory examples.
+
  * Added a lock to prevent simultaneous dumps from multiple threads.
    Function save_dump now returns the file name and the headers.
    If the file name comtains the sub-string '{sequence_number}',
    it is replaced by the running number of the dump.
 
  * New function dump_on_unhandled_exceptions. It can be used as a 
-   function decorator or to setup a sys.execpthook handler.
+   function decorator or to setup a sys.execpthook handler. The environment
+   variable PYHEAPDUMP_DIR defines the dump directory.
 
  * Rewrite of the thread/tasklet locking to avoid dead locks.
 
