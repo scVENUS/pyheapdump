@@ -1,4 +1,4 @@
-
+#
 # -*- coding: utf-8 -*-
 #
 # Copyright (c) 2014 by Anselm Kruis
@@ -20,40 +20,47 @@ from __future__ import absolute_import, print_function, unicode_literals, divisi
 
 import threading
 import sys
-import random
-import operator
 import time
+import Queue
 
 import pyheapdump
 # pyheapdump.dump_on_unhandled_exceptions()
 
 
 @pyheapdump.dump_on_unhandled_exceptions
-def worker(shared_storage, index, condition):
-    while True:
-        v = shared_storage[0] + 1
-        sys.stdout.write("Worker {} {}\n".format(index, v))
-        if index:
-            if v % condition == index:
-                raise ValueError("Exception!!!")
-        shared_storage[0] = v
+def worker(index, condition, input_data_source, result_queue):
+    for input_data in input_data_source:
+        result = input_data + 1  # really complicated and time consuming computation
+        # unfortunately the computation is error prone ;-)
+        if condition == 0 or input_data > index and input_data % condition == index:
+            raise ValueError("Exception!!!")
+        time.sleep(0.1)
+
+        # store the result
+        result_queue.put("Worker {} input_data {} result {}".format(index, input_data, result))
 
 
 def main(argv):
-    n_threads = 3
-    shared_storage = [1]
-    condition = 100
+    n_threads = int(argv.pop(0)) if argv else 3
+    condition = int(argv.pop(0)) if argv else 20
+    sys.setcheckinterval(1000)
+    input_data_source = iter(xrange(sys.maxint))
+    result_queue = Queue.Queue()
     for i in range(n_threads):
-        t = threading.Thread(args=(shared_storage, i, condition), target=worker)
+        t = threading.Thread(args=(i, condition, input_data_source, result_queue), target=worker)
         t.daemon = True
         t.start()
-    count = threading.active_count()
-    last_count = count
+    last_count = count = n_threads
+    time.sleep(2)
     while(count >= last_count):
         last_count = count
         count = threading.active_count()
-        #print("values: ", shared_storage)
-        time.sleep(0.5)
+        try:
+            result = result_queue.get(block=False, timeout=0.5)
+        except Queue.Empty:
+            pass
+        else:
+            print("Result: ", result)
 
     print ("Opps, a thread died.")
 

@@ -2,3 +2,4 @@ include conf.py
 include *.rst
 include *.md
 include LICENSE
+recursive-include examples *.py *.pth
