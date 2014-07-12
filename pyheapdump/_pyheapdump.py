@@ -1299,13 +1299,15 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
     if message is None:
         message = DEFAULT_ON_UNHANDLED_EXCEPTION_MESSAGE
 
+    if dump_dir is None:
+        dump_dir = os.environ.get("PYHEAPDUMP_DIR")
     if dump_dir is not None and not os.path.isdir(dump_dir):
         dump_dir = None
-    if dump_dir is None:
+    if not dump_dir:
         dump_dir = tempfile.gettempdir()
     dump_dir = os.path.abspath(dump_dir)
 
-    filename = os.path.basename('python_heap_' + str(os.getpid())) + '_{sequence_number}_' + os.path.extsep + 'dump'
+    filename = os.path.basename('python_heap_' + str(os.getpid())) + '_{sequence_number}' + os.path.extsep + 'dump'
     name_and_path = os.path.join(dump_dir, filename)
 
     if function is not None:
