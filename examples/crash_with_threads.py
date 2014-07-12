@@ -24,15 +24,15 @@ import time
 import Queue
 
 import pyheapdump
-# pyheapdump.dump_on_unhandled_exceptions()
+pyheapdump.dump_on_unhandled_exceptions()
 
 
 @pyheapdump.dump_on_unhandled_exceptions
 def worker(index, condition, input_data_source, result_queue):
     for input_data in input_data_source:
         result = input_data + 1  # really complicated and time consuming computation
-        # unfortunately the computation is error prone ;-)
-        if condition == 0 or input_data > index and input_data % condition == index:
+        # unfortunately the algorithm is error prone ;-)
+        if condition == 0 or (input_data > 10 and input_data % condition == index):
             raise ValueError("Exception!!!")
         time.sleep(0.1)
 
@@ -41,24 +41,36 @@ def worker(index, condition, input_data_source, result_queue):
 
 
 def main(argv):
+    """Run the example
+
+    Usage::
+
+        python crash_with_threads.py [<number of threads> [<condition>]]
+
+        number of threads: the number of worker threads
+    """
     n_threads = int(argv.pop(0)) if argv else 3
     condition = int(argv.pop(0)) if argv else 20
     sys.setcheckinterval(1000)
     input_data_source = iter(xrange(sys.maxint))
     result_queue = Queue.Queue()
+    all_threads = []
     for i in range(n_threads):
         t = threading.Thread(args=(i, condition, input_data_source, result_queue), target=worker)
         t.daemon = True
+        all_threads.append(t)
+    for t in all_threads:
         t.start()
+    t = all_threads = None
     last_count = count = n_threads
-    time.sleep(2)
     while(count >= last_count):
         last_count = count
         count = threading.active_count()
         try:
             result = result_queue.get(block=False, timeout=0.5)
         except Queue.Empty:
-            pass
+            if condition == 42:
+                raise
         else:
             print("Result: ", result)
 
