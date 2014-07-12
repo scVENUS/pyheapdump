@@ -29,6 +29,8 @@ Create and debug heap dumps.
 .. note::
    The pyheapdump package currently requires Python 2.7.
 
+.. autofunction:: dump_on_unhandled_exceptions
+
 .. autofunction:: create_dump
 
 .. autofunction:: save_dump

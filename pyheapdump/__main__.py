@@ -16,6 +16,19 @@
 #  limitations under the License.
 #
 
+"""
+=====================
+ Pyheapdump.__main__
+=====================
+
+Debug heap dumps.
+
+.. warning::
+   This is alpha quality code.
+
+.. autofunction:: main
+"""
+
 
 from __future__ import absolute_import, print_function, unicode_literals, division
 
@@ -27,6 +40,16 @@ from pyheapdump import debug_dump
 
 
 def main(argv=None):
+    """Debug a Python heap dump file.
+
+    You can invoke this function using the following command::
+
+        python -m pyheapdump [OPTIONS] pyheapdump
+
+    Use the option '-h' to get help::
+
+        python -m pyheapdump -h
+    """
     if argv is None:
         argv = sys.argv[1:]
     parser = argparse.ArgumentParser(description='debug a Python heap dump', prog=os.path.basename(sys.executable) + " -m pyheapdump")

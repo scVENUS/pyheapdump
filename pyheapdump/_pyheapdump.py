@@ -259,7 +259,8 @@ class HeapDumper(object):
         :type headers: collections.MutableMapping
         :param formatter: the formatter to be used. The formatter must be a callable with two arguments *pickle* and *headers* that returns the
                           bytes of the heap dump file. See :class:`MimeMessageFormatter` for an example.
-        :returns: `None`.
+        :param lock_function: Used internally. Do not set this argument!
+        :returns: A tuple of length 2: the name of the dump file and the headers dictionary.
         """
         lock_function = lock_function()
         try:
@@ -323,6 +324,7 @@ class HeapDumper(object):
         :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
         :param headers: a mutable mapping, that contains header lines. All keys must be unicode strings. Values must be text, bytes or None.
         :type headers: collections.MutableMapping
+        :param lock_function: Used internally. Do not set this argument!
         :returns: the compressed pickle of the heap-dump, the updated headers collection
         :rtype: tuple
         """
@@ -880,12 +882,12 @@ def load_dump(dumpfile=None, dump=None):
     Load a Python heap dump
 
     This function loads and preprocesses a Python dump file or
-    a python dump string or an already unpickled heap dump dictionary.
+    a Python dump string or an already unpickled heap dump dictionary.
 
     Arguments
 
     :param dumpfile: the name of the heap-dump file or a file-like object open for reading bytes.
-    :type dumpfile: str or file-like
+    :type dumpfile: string or file-like
     :param dump: The content of a heap-dump file (bytes) or
        a compressed pickle (bytes, starts with ``b"BZh9"``) or
        a MIME-message with content type ``application/x.python-heapdump``
@@ -1071,10 +1073,10 @@ def debug_dump(dumpfile, dump=None, debugger_options=None, invoke_debugger_func=
     This function currently looks for the following debuggers in the given order.
     It uses the first debugger found:
 
-     * :mod:`pydevd`, the debugger from the PyDev eclipse plugin. Use version 3.3.3 or later and
-       run the remote debug server.
+     * :mod:`pydevd`, the debugger from the PyDev eclipse plugin. It requires PyDev version 3.3.3 or later and
+       you must start the PyDev debug server in the debug perspective of eclipse.
      * :mod:`pdb`, the debugger from the Python library. Unfortunately, :mod:`pdb` supports neither
-       threads nor tasklet.
+       threads nor tasklets.
 
     You can invoke this function directly from your shell::
 
@@ -1155,6 +1157,8 @@ class UnpicklerSurrogate(object):
 
 
 class FailSaveUnpickler(pickle.Unpickler):
+    """A fail save unpickler
+    """
     dispatch = pickle.Unpickler.dispatch
 
     def on_exception(self, resolution):
@@ -1284,17 +1288,33 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
     """
     Create a heap dump for each unhandled exception.
 
-    This function registers a sys.excepthook handler that
-    creates heap dumps on otherwise unhandled exceptions.
+    This function acts as a function decorator or, if no function is given,
+    registers a :attr:`sys.excepthook` handler. In both cases it causes python to
+    create heap dumps on otherwise unhandled exceptions.
 
+    If *function* is given, dump_on_unhandled_exceptions wraps *function*
+    and returns the newly created wrapper. The wrapper catches exceptions
+    of type :exc:`Exception` and writes a heap dump. If *reraise* is true,
+    it re-raises the exception. Otherwise it returns `None`.
+
+    If *function* is `None`, dump_on_unhandled_exceptions registers a
+    :attr:`sys.excepthook` handler. If the handler receives an :exc:`Exception`,
+    it writes a heap dump. If *daisy_chain_sys_excepthook* is true, the
+    handler finally calls the previous exception handler.
+
+    :param function: a callable. If given dump_on_unhandled_exceptions returns a wrapper for *function*.
     :param dump_dir: the directory where to create the dump. If
       set to `None`, the dump is created in the directory given by
+      the environment variable :envvar:`PYHEAPDUMP_DIR` or, if the variable
+      is unset or empty, the dump is created in the directory returned by
       :func:`tempfile.gettempdir()`.
     :type dump_dir: a string.
-    :param daisy_chain_sys_excepthook: if true, daisy chain the original sys.excepthook handler.
-    :type daisy_chain_sys_excepthook: bool
     :param message: a message to print on sys.stderr.
     :type message: string
+    :param reraise: if true, a wrapper re-raises the caught exception.
+    :type reraise: bool
+    :param daisy_chain_sys_excepthook: if true, daisy chain the original sys.excepthook handler.
+    :type daisy_chain_sys_excepthook: bool
     """
     if message is None:
         message = DEFAULT_ON_UNHANDLED_EXCEPTION_MESSAGE
