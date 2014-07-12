@@ -809,7 +809,9 @@ class FakeFrame(object):
             fake_frame.f_lasti = frame.f_lasti
             fake_frame.f_lineno = frame.f_lineno
             fake_frame.f_locals = frame.f_locals
-            fake_frame.f_restricted = frame.f_restricted
+            # work around http://bugs.python.org/issue21967
+            # fake_frame.f_restricted = frame.f_restricted
+            fake_frame.f_restricted = False
             fake_frame.f_trace = frame.f_trace
             return fake_frame
 
