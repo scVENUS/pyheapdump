@@ -1115,7 +1115,7 @@ def debug_dump(dumpfile, dump=None, debugger_options=None, invoke_debugger_func=
     dump = load_dump(dumpfile=dumpfile, dump=dump)
     _cache_files(dump['files'])
     _old_checkcache = linecache.checkcache
-    linecache.checkcache = lambda filename = None: None
+    linecache.checkcache = lambda filename=None: None  # @IgnorePep8
     invoke_debugger_func(dump, debugger_options)
     linecache.checkcache = _old_checkcache
 
@@ -1171,7 +1171,7 @@ class FailSaveUnpickler(pickle.Unpickler):
         del self.stack[k:]
         instantiated = 0
         if (not args and
-                type(klass) is types.ClassType and
+                type(klass) is types.ClassType and  # @IgnorePep8
                 not hasattr(klass, "__getinitargs__")):
             try:
                 value = pickle._EmptyClass()

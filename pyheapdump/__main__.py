@@ -41,7 +41,7 @@ def main(argv=None):
 
     namespace = parser.parse_args(argv)
     if namespace.debug_pyheapdump:
-        ###  It is better to use remote debugging, because of the debugger specific code later on
+        # It is better to use remote debugging, because of the debugger specific code later on
         sys.path.append(namespace.debugger_dir)
         import pydevd
         pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
