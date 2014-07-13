@@ -228,7 +228,7 @@ class HeapDumper(object):
         return cls.sequence_number
 
     def save_dump(self, filename, tb=None, exc_info=None, threads=None,
-                  tasklets=None, headers=None, formatter=None,
+                  tasklets=None, headers=None, files=None, formatter=None,
                   lock_function=lock_function):
         """
         Create and save a Python heap-dump.
@@ -258,6 +258,11 @@ class HeapDumper(object):
         :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
         :param headers: a mutable mapping, that contains header lines. All keys must be unicode strings. Values must be text, bytes or None.
         :type headers: collections.MutableMapping
+        :param files: this argument controls, if the heap dump contains the source code of those Python files, that contribute
+            to the dumped frames. If *files* is a container, a file is included, if its name is in the container. Otherwise, if *files* is a
+            callable, it will be called with a file name as its single argument. If the callable returns a true-value, the file
+            will be included. Otherwise, if *files* is a true-value, all files are included. Lastly, if *files* is `None`, a default
+            behaviour applies which is currently to include all files.
         :param formatter: the formatter to be used. The formatter must be a callable with two arguments *pickle* and *headers* that returns the
                           bytes of the heap dump file. See :class:`MimeMessageFormatter` for an example.
         :param lock_function: Used internally. Do not set this argument!
@@ -268,7 +273,7 @@ class HeapDumper(object):
             if tb is not None and exc_info is None:
                 exc_info = (None, None, tb)
             pickle, headers = self.create_dump(exc_info=exc_info, threads=threads, tasklets=tasklets,
-                                               headers=headers,
+                                               headers=headers, files=files,
                                                lock_function=lock_function)
             try:
                 sequence_number = headers['sequence_number']
@@ -290,7 +295,7 @@ class HeapDumper(object):
         finally:
             lock_function.unlock()
 
-    def create_dump(self, exc_info=None, threads=None, tasklets=None, headers=None,
+    def create_dump(self, exc_info=None, threads=None, tasklets=None, headers=None, files=None,
                     lock_function=lock_function):
         """
         Create a Python heap-dump.
@@ -325,6 +330,11 @@ class HeapDumper(object):
         :param tasklets: Stackless Python only: either `None` for all tasklets (default) or `False` to omit tasklet information altogether.
         :param headers: a mutable mapping, that contains header lines. All keys must be unicode strings. Values must be text, bytes or None.
         :type headers: collections.MutableMapping
+        :param files: this argument controls, if the heap dump contains the source code of those Python files, that contribute
+            to the dumped frames. If *files* is a container, a file is included, if its name is in the container. Otherwise, if *files* is a
+            callable, it will be called with a file name as its single argument. If the callable returns a true-value, the file
+            will be included. Otherwise, if *files* is a true-value, all files are included. Lastly, if *files* is `None`, a default
+            behaviour applies which is currently to include all files.
         :param lock_function: Used internally. Do not set this argument!
         :returns: the compressed pickle of the heap-dump, the updated headers collection
         :rtype: tuple
@@ -333,17 +343,28 @@ class HeapDumper(object):
         try:
             with high_recusion_limit():
                 return run_in_tasklet(self._create_dump_impl, exc_info=exc_info, threads=threads,
-                                      tasklets=tasklets, headers=headers,
+                                      tasklets=tasklets, headers=headers, files=files,
                                       lock_function=lock_function)
         finally:
             lock_function.unlock()
 
     def _create_dump_impl(self, exc_info=None, threads=None, tasklets=None, current_tasklet=None,
-                          headers=None, lock_function=lock_function):
+                          headers=None, files=None, lock_function=lock_function):
         """
         Implementation of :func:`create_dump`.
         """
         lock_function = lock_function()
+        if isinstance(files, collections.Container):
+            def files_filter(name, container=files):
+                return name in container
+        elif callable(files):
+            files_filter = files
+        else:
+            if files is None:
+                files = True
+
+            def files_filter(name, const=bool(files)):
+                return const
 
         try:
             with atomic(), high_recusion_limit():
@@ -401,23 +422,24 @@ class HeapDumper(object):
 
                     # get files for frames
                     if 'traceback' in dump:
-                        _get_traceback_files(dump['traceback'], files=files)
+                        _get_traceback_files(dump['traceback'], files=files, files_filter=files_filter)
                     d = dump.get('thread_frames', ())
                     for tid in d:
-                        _get_frame_files(d[tid], files=files)
+                        _get_frame_files(d[tid], files=files, files_filter=files_filter)
                     d = dump.get('tasklets', ())
                     for tid in d:
                         main, current, other = d[tid]
-                        _get_tasklet_files(main, files=files)
-                        _get_tasklet_files(current, files=files)
+                        _get_tasklet_files(main, files=files, files_filter=files_filter)
+                        _get_tasklet_files(current, files=files, files_filter=files_filter)
                         for t in other.values():
-                            _get_tasklet_files(t, files=files)
+                            _get_tasklet_files(t, files=files, files_filter=files_filter)
 
                     d = main = current = other = t = None
 
                     del current_frames
                     del exc_info
                     del files
+                    del files_filter
 
                     try:
                         # pickle
@@ -620,15 +642,17 @@ DEFAULT_FORMATTER = MimeMessageFormatter()
 """Default formatter."""
 
 
-def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None, formatter=None, lock_function=lock_function):
+def save_dump(filename, tb=None, exc_info=None, threads=None, tasklets=None, headers=None,
+              files=None, formatter=None, lock_function=lock_function):
     lock_function = lock_function()
-    return DEFAULT_HEAP_DUMPER.save_dump(filename, tb, exc_info, threads, tasklets, headers, formatter, lock_function=lock_function)
+    return DEFAULT_HEAP_DUMPER.save_dump(filename, tb, exc_info, threads, tasklets,
+                                         headers, files, formatter, lock_function=lock_function)
 save_dump.__doc__ = DEFAULT_HEAP_DUMPER.save_dump.__doc__
 
 
-def create_dump(exc_info=None, threads=None, tasklets=None, headers=None, lock_function=lock_function):
+def create_dump(exc_info=None, threads=None, tasklets=None, headers=None, files=None, lock_function=lock_function):
     lock_function = lock_function()
-    return DEFAULT_HEAP_DUMPER.create_dump(exc_info, threads, tasklets, headers, lock_function=lock_function)
+    return DEFAULT_HEAP_DUMPER.create_dump(exc_info, threads, tasklets, headers, files, lock_function=lock_function)
 create_dump.__doc__ = DEFAULT_HEAP_DUMPER.create_dump.__doc__
 
 
@@ -840,7 +864,7 @@ class FakeTraceback(object):
             return fake_tb
 
 
-def _get_tasklet_files(tasklet, files=None):
+def _get_tasklet_files(tasklet, files=None, files_filter=None):
     try:
         frame = tasklet.frame
     except AttributeError:
@@ -848,34 +872,42 @@ def _get_tasklet_files(tasklet, files=None):
             files = {}
         return files  # not a tasklet
     else:
-        return _get_frame_files(frame, files)
+        return _get_frame_files(frame, files, files_filter)
 
 
-def _get_traceback_files(traceback, files=None):
+def _get_traceback_files(traceback, files=None, files_filter=None):
     if files is None:
         files = {}
     while traceback:
-        _get_frame_files(traceback.tb_frame, files)
+        _get_frame_files(traceback.tb_frame, files, files_filter)
         traceback = traceback.tb_next
     return files
 
 FILE_NOT_FOUND_PREFIX = "couldn't locate"
 
 
-def _get_frame_files(frame, files):
+def _accept_always(name):
+    return True
+
+
+def _get_frame_files(frame, files, files_filter=None):
+    if files_filter is None:
+        files_filter = _accept_always
     while frame:
-        filename0 = frame.f_code.co_filename
-        filename1 = os.path.normcase(os.path.normpath(filename0))
-        filename2 = os.path.normcase(os.path.abspath(filename1))
-        if filename0 not in files:
-            try:
-                files[filename0] = open(filename0, 'rb').read()
-            except IOError:
-                files[filename0] = FILE_NOT_FOUND_PREFIX + " '%s' during dump" % filename0
-        if filename1 not in files:
-            files[filename1] = files[filename0]
-        if filename2 not in files:
-            files[filename2] = files[filename0]
+        filename0 = inspect.getsourcefile(frame.f_code)
+        if filename0 is not None:
+            filename1 = os.path.normcase(os.path.normpath(filename0))
+            filename2 = os.path.normcase(os.path.abspath(filename1))
+            if files_filter(filename0) or files_filter(filename1) or files_filter(filename2):
+                if filename0 not in files:
+                    try:
+                        files[filename0] = open(filename0, 'rb').read()
+                    except IOError:
+                        files[filename0] = FILE_NOT_FOUND_PREFIX + " '%s' during dump" % filename0
+                if filename1 not in files:
+                    files[filename1] = files[filename0]
+                if filename2 not in files:
+                    files[filename2] = files[filename0]
         frame = frame.f_back
     return files
 
@@ -1363,7 +1395,8 @@ The developer of this program can use the dump to analyse the failure.
 """
 
 
-def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, reraise=None, daisy_chain_sys_excepthook=None):
+def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, files=None,
+                                 reraise=None, daisy_chain_sys_excepthook=None):
     """
     Create a heap dump for each unhandled exception.
 
@@ -1390,6 +1423,17 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
     :type dump_dir: a string.
     :param message: a message to print on sys.stderr.
     :type message: string
+    :param files: this argument controls, if the heap dump contains the source code of those Python files, that contribute
+        to the dumped frames. If *files* is `None` and
+        the environment variable :envvar:`PYHEAPDUMP_WITH_FILES` is defined, *files* is set from PYHEAPDUMP_WITH_FILES
+        as follows: if PYHEAPDUMP_WITH_FILES contains :attr:`os.path.pathsep`, *files* is set to the list of
+        path entries. Otherwise, *files* is set to `True` if PYHEAPDUMP_WITH_FILES is "yes" or "true". All other non empty
+        values set *files* to `False`.
+
+        If *files* is a container, a file is included, if its name is in the container. Otherwise, if *files* is a
+        callable, it will be called with a file name as its single argument. If the callable returns a true-value, the file
+        will be included. Otherwise, if *files* is a true-value, all files are included. Lastly, if *files* is `None`, a default
+        behaviour applies which is currently to include all files.
     :param reraise: if true, a wrapper re-raises the caught exception.
     :type reraise: bool
     :param daisy_chain_sys_excepthook: if true, daisy chain the original sys.excepthook handler.
@@ -1406,6 +1450,16 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
         dump_dir = tempfile.gettempdir()
     dump_dir = os.path.abspath(dump_dir)
 
+    if files is None:
+        files = os.environ.get("PYHEAPDUMP_WITH_FILES")
+        if files:
+            if os.path.pathsep in files:
+                files = files.split(os.path.pathsep)
+            else:
+                files = files.lower() in ('yes', 'true', 'y')
+        else:
+            files = None
+
     filename = os.path.basename('python_heap_' + str(os.getpid())) + '_{sequence_number}' + os.path.extsep + 'dump'
     name_and_path = os.path.join(dump_dir, filename)
 
@@ -1420,7 +1474,8 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
                     try:
                         lf = lock_function()
                         exctype, value, traceback_ = sys.exc_info()
-                        name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_), lock_function=lf)[0]
+                        name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_),
+                                                   files=files, lock_function=lf)[0]
                         if message:
                             print(message.format(exctype=exctype, excvalue=value,
                                                  traceback="".join(traceback.format_tb(traceback_))[:-1],
@@ -1443,7 +1498,7 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, rer
                 ok = False
                 sys.excepthook = orig_excepthook
                 try:
-                    name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_))[0]
+                    name_and_path2 = save_dump(name_and_path, exc_info=(exctype, value, traceback_), files=files)[0]
                     ok = True
                 finally:
                     sys.excepthook = excepthook
