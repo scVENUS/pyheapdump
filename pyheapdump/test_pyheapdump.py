@@ -16,7 +16,6 @@
 #  limitations under the License.
 #
 
-
 from __future__ import absolute_import, print_function, unicode_literals, division
 
 import sys
@@ -84,8 +83,8 @@ class PyheapdumpTest(unittest.TestCase):
         self.assertIsInstance(p[0], bytes)
         self.assertIsInstance(p[1], dict)
         modules = sPickle.SPickleTools.getImportList(p[0])
-        #pprint.pprint(modules)
-        #sPickle.SPickleTools.dis(p)
+        # pprint.pprint(modules)
+        # sPickle.SPickleTools.dis(p)
 
     def testSaveDump(self):
         f = io.BytesIO()
@@ -97,13 +96,7 @@ class PyheapdumpTest(unittest.TestCase):
         self.assertIsInstance(msg, bytes)
         self.assertIn(b'Content-Type: multipart/related; type="application/x.python-heapdump";', msg)
         self.assertIn(b'X-python-heapdump-version: 2', msg)
-        #print(msg[:2000].decode("iso-8859-1"))
-
-    @unittest.skip("needs monkey patching of thread/threading ... Not yet implemented")
-    def testCreateBlocking(self):
-        blocking_obj = BlockingPickle(0)
-        _pyheapdump.create_dump(exc_info=False, threads=None, tasklets=None)
-        del blocking_obj
+        # print(msg[:2000].decode("iso-8859-1"))
 
     def _writeDump(self):
         try:
@@ -125,5 +118,4 @@ class PyheapdumpTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    #import sys;sys.argv = ['', 'Test.testName']
     unittest.main()
