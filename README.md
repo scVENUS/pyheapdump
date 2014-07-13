@@ -23,6 +23,19 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2014-07-13 Version 0.2.2:
+
+ * Add an option to control the inclusion of python source into the dump.
+   If you use dump_on_unhandled_exceptions you can use the environment 
+   variable PYHEAPDUMP_WITH_FILES=no to exclude files. Read the documentation
+   of dump_on_unhandled_exceptions for additional options.
+   
+ * If you use PyDev to analyse a dump and a python source file is not available,
+   PyDev now extracts the source from the dump. (Eventually you have to enable
+   the action "Get from server (read only)" in the PyDev Source Locator preferences:
+   Menu "Window" -> "Preferences" -> "PyDev" -> "Run/Debug" -> "Source Locator" ->
+   "Action when source is not directly found".)
+
 2014-07-12 Version 0.2.1:
 
  * Work around Python bug http://bugs.python.org/issue21967. It used to 
