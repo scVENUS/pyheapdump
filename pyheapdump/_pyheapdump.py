@@ -41,6 +41,7 @@ import re
 import logging
 import tempfile
 import functools
+import io
 from email import header, message_from_file, message_from_string, message
 from email.mime import application, multipart
 from email.utils import formatdate
@@ -353,7 +354,8 @@ class HeapDumper(object):
                 dump = {'dump_version': DUMP_VERSION,
                         'files': files,
                         'sequence_number': sequence_number,
-                        'pid': pid}
+                        'pid': pid,
+                        'pathmodule': os.path.__name__}
                 # add exception information
                 if exc_info is not False:
                     if exc_info is None:
@@ -857,15 +859,23 @@ def _get_traceback_files(traceback, files=None):
         traceback = traceback.tb_next
     return files
 
+FILE_NOT_FOUND_PREFIX = "couldn't locate"
+
 
 def _get_frame_files(frame, files):
     while frame:
-        filename = os.path.abspath(frame.f_code.co_filename)
-        if filename not in files:
+        filename0 = frame.f_code.co_filename
+        filename1 = os.path.normcase(os.path.normpath(filename0))
+        filename2 = os.path.normcase(os.path.abspath(filename1))
+        if filename0 not in files:
             try:
-                files[filename] = open(filename).read()
+                files[filename0] = open(filename0, 'rb').read()
             except IOError:
-                files[filename] = "couldn't locate '%s' during dump" % frame.f_code.co_filename
+                files[filename0] = FILE_NOT_FOUND_PREFIX + " '%s' during dump" % filename0
+        if filename1 not in files:
+            files[filename1] = files[filename0]
+        if filename2 not in files:
+            files[filename2] = files[filename0]
         frame = frame.f_back
     return files
 
@@ -994,12 +1004,85 @@ def load_dump(dumpfile=None, dump=None):
 
 def invoke_pdb(dump, debugger_options):
     import pdb
-    pdb.post_mortem(dump['traceback'])
+    _cache_files(dump['files'])
+    _old_checkcache = linecache.checkcache
+    linecache.checkcache = lambda filename=None: None  # @IgnorePep8
+    try:
+        pdb.post_mortem(dump['traceback'])
+    finally:
+        linecache.checkcache = _old_checkcache
 
 
 def invoke_pydevd(dump, debugger_options):
     import pydevd  # @UnresolvedImport
     from pydevd_custom_frames import addCustomFrame  # @UnresolvedImport
+
+    files = dump.get('files')
+    if files:
+        # we monkey patch the global namespace of PyDB.processNetCommand
+
+        class MonkeyPatchAttr(object):
+            def __init__(self, baseobj, name, replacement):
+                self.__baseobj = baseobj
+                self.__name = name
+                self.__replacement = replacement
+
+            def __getattr__(self, name):
+                if name == self.__name:
+                    return self.__replacement
+                return getattr(self.__baseobj, name)
+
+        pathmodule = dump.get('pathmodule', os.path.__name__)
+        __import__(pathmodule)
+        pathmodule = sys.modules[pathmodule]
+
+        def get_file(name):
+            try:
+                f = files[name]
+            except KeyError:
+                name = pathmodule.normcase(pathmodule.normpath(name))
+                try:
+                    f = files[name]
+                except KeyError:
+                    # print("\n         get_file: KeyError", file=sys.stderr)
+                    return None
+            if f.startswith(FILE_NOT_FOUND_PREFIX):
+                # print("\n         get_file: PREFIX", file=sys.stderr)
+                return None
+            # print("\n         get_file: ", repr(name), file=sys.stderr)
+            return f
+
+        def mp_exists(path):
+            # print("\n------ mp_exists: ", repr(path), file=sys.stderr)
+            if get_file(path) is not None:
+                return True
+            return os.path.exists(path)
+
+        def mp_open(name, *args, **kw):
+            # print("\n------ mp_open: ", repr(name), file=sys.stderr)
+            f = get_file(name)
+            if f is not None:
+                return io.BytesIO(f)
+            return open(name, *args, **kw)
+
+        PyDB = pydevd.PyDB
+        pnc = PyDB.processNetCommand
+        if not isinstance(pnc, types.FunctionType):
+            pnc = pnc.__func__
+
+        # create the new globals dictionary
+        mp_globals = dict(pnc.__globals__)
+        mp_globals['os'] = MonkeyPatchAttr(os, 'path', MonkeyPatchAttr(os.path, 'exists', mp_exists))
+        mp_globals['open'] = mp_open
+
+        # recreate the method with using the new globals dictionary
+        mp_processNetCommand = types.FunctionType(pnc.__code__, mp_globals, pnc.__name__, pnc.__defaults__, pnc.__closure__)
+        for name in ('__doc__', '__dict__', '__module__', '__qualname__', '__annotations__', '__kwdefaults__'):
+            try:
+                setattr(mp_processNetCommand, name, getattr(pnc, name))
+            except AttributeError:
+                pass
+        PyDB.processNetCommand = mp_processNetCommand
 
     current_thread_id = thread.get_ident()
     current_thread = threading.current_thread()
@@ -1115,11 +1198,7 @@ def debug_dump(dumpfile, dump=None, debugger_options=None, invoke_debugger_func=
                 invoke_debugger_func = invoke_pydevd
 
     dump = load_dump(dumpfile=dumpfile, dump=dump)
-    _cache_files(dump['files'])
-    _old_checkcache = linecache.checkcache
-    linecache.checkcache = lambda filename=None: None  # @IgnorePep8
     invoke_debugger_func(dump, debugger_options)
-    linecache.checkcache = _old_checkcache
 
 
 def _tasklet_name(tasklet, tid, is_current=None, is_main=None, main_thread_id=None, current_thread_id=None):
