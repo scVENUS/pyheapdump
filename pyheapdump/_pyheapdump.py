@@ -1049,6 +1049,30 @@ def invoke_pydevd(dump, debugger_options):
     import pydevd  # @UnresolvedImport
     from pydevd_custom_frames import addCustomFrame  # @UnresolvedImport
 
+    class IoBuffer(object):
+        __slots__ = ('msg',)
+
+        def __init__(self, msg):
+            self.msg = msg
+
+        def getvalue(self):
+            return self.msg
+
+    def debugerWrite(msg, stderr=False):
+        debugger = pydevd.GetGlobalDebugger()
+        if debugger is None:
+            return
+        debugger.checkOutput(IoBuffer(msg), 2 if stderr else 1)
+
+    def debugerWriteMsg(lines):
+        eol = '\n'
+        if isinstance(lines, basestring):
+            lines = lines.split('\n')
+        for l in lines:
+            if not l.endswith(eol):
+                l += eol
+            debugerWrite(l, stderr=True)
+
     files = dump.get('files')
     if files:
         # we monkey patch the global namespace of PyDB.processNetCommand
@@ -1163,6 +1187,21 @@ def invoke_pydevd(dump, debugger_options):
             tb = None
 
     if frames:
+
+        lines = []
+        try:
+            formattedException = traceback.format_exception(dump['exception_class'], dump['exception'], dump['traceback'])
+
+            lines.append("Entering debugger for post mortem analysis of an exception.")
+            lines.append("")
+            lines.append("Exception information")
+            lines.extend(formattedException)
+            lines.append("")
+            lines.append("This is a POST MORTEM analysis: you can inspect variables in the call stack,")
+            lines.append("but once you step or continue, the debugging terminates.")
+        except Exception:
+            traceback.print_exc()
+
         frames_byid = {}
         tb = None
         frame = frames[0]
@@ -1172,6 +1211,8 @@ def invoke_pydevd(dump, debugger_options):
         frame = frames[0]
         frames = None
 
+        if lines:
+            debugerWriteMsg(lines)
         info.pydev_force_stop_at_exception = (frame, frames_byid)
         pydevd.GetGlobalDebugger().force_post_mortem_stop += 1
     else:
