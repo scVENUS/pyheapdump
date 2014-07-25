@@ -117,5 +117,46 @@ class PyheapdumpTest(unittest.TestCase):
         _pyheapdump.debug_dump(self.dump_file_name)
 
 
+class UnpickleSurrogateTest(unittest.TestCase):
+    def setUp(self):
+        super(UnpickleSurrogateTest, self).setUp()
+        self.surrogate = _pyheapdump.newUnpicklerSurrogate("test",
+                                                           module=self.__class__.__module__,
+                                                           name=self.__class__.__name__)
+
+    def isSurrogateTest(self, surrogate):
+        self.assertIsInstance(surrogate, _pyheapdump.AbstractSurrogate)
+        self.assertIsNot(surrogate.__class__, _pyheapdump.AbstractSurrogate)
+
+    def testNothing(self):
+        self.isSurrogateTest(self.surrogate)
+
+    def test__setitem__(self):
+        self.surrogate["foo"] = "bar"
+        self.assertIsInstance(self.surrogate, _pyheapdump.SurrogatePersonalityDict)
+        self.assertDictEqual(self.surrogate._Surrogate__state._dict, dict(foo="bar"))
+
+    def test_append(self):
+        self.surrogate.append("foo")
+        self.assertIsInstance(self.surrogate, _pyheapdump.SurrogatePersonalityList)
+        self.assertListEqual(self.surrogate._Surrogate__state._list, ["foo"])
+
+    def test_extend(self):
+        l = ["foo", "bar"]
+        self.surrogate.extend(l)
+        self.assertIsInstance(self.surrogate, _pyheapdump.SurrogatePersonalityList)
+        self.assertListEqual(self.surrogate._Surrogate__state._list, l)
+
+    def test_instantiate(self):
+        surrogate2 = _pyheapdump.newUnpicklerSurrogate("_instantiate", func=self.surrogate, args=())
+        self.isSurrogateTest(surrogate2)
+        self.assertIsInstance(surrogate2, self.surrogate._Surrogate__state._class)
+
+    def test__new__(self):
+        surrogate2 = self.surrogate.__new__(self.surrogate)
+        self.isSurrogateTest(surrogate2)
+        self.assertIsInstance(surrogate2, self.surrogate._Surrogate__state._class)
+
+
 if __name__ == "__main__":
     unittest.main()

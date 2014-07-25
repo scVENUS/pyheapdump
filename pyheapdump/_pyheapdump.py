@@ -1298,14 +1298,133 @@ def _cache_files(files):
         linecache.cache[name] = (len(data), None, lines, name)
 
 
-class UnpicklerSurrogate(object):
-    def __init__(self, operation, exc, func=None, args=(), module=None, name=None):
+class SurrogateState(object):
+    def __init__(self, operation, exc=None, func=None, args=(), module=None, name=None):
         self.operation = operation
         self.exc = exc
         self.func = func
         self.args = args
         self.module = module
-        self.name = name
+        self.name = name or "UNNAMED"
+
+    def __getattr__(self, name):
+        if name == '_list':
+            self._list = l = []
+            return l
+        if name == '_dict':
+            self._dict = d = {}
+            return d
+        raise AttributeError(name)
+
+
+class AbstractSurrogate(object):
+    def __new__(self, *args, **kw):
+        assert isinstance(self, AbstractSurrogate)
+        state = self._Surrogate__state
+        try:
+            cls = state._class
+        except AttributeError:
+            name = state.name or (type(self).__name__ + "Class")
+            if isinstance(name, unicode):
+                name = name.encode("UTF-8")
+            module = state.module or __name__
+            cls = type(name, (AbstractSurrogate,), dict(__module__=module))
+            state._class = cls
+        obj = object.__new__(cls)
+        state = SurrogateState(operation="__new__", args=args)
+        object.__setattr__(obj, "_Surrogate__state", state)
+        obj.__setstate__(kw)
+        return obj
+
+    def __repr__(self):
+        try:
+            cls = self._Surrogate__state._class
+        except AttributeError:
+            return object.__repr__(self)
+        return repr(cls)
+
+    def __setitem__(self, key, value):
+        cls = self.__class__
+        cls.__bases__ = (SurrogatePersonalityDict, ) + cls.__bases__
+        return SurrogatePersonalityDict.__setitem__(self, key, value)
+
+    def __getattr__(self, name):
+        if name in ('append', 'extend'):
+            cls = self.__class__
+            cls.__bases__ = (SurrogatePersonalityList, ) + cls.__bases__
+            return getattr(self, name)
+        if len(name) >= 5 and name.startswith('__') and name.endswith('__'):
+            raise AttributeError(name)
+        return getattr(self._Surrogate__state._state, name)
+
+    def __setstate__(self, state):
+        if isinstance(state, dict):
+            self.__dict__.update(state)
+        else:
+            self._Surrogate__state._state = state
+
+    def __dir__(self):
+        try:
+            _state = self._Surrogate__state._state
+        except AttributeError:
+            return dir(self.__class__) + list(self.__dict__)
+        else:
+            return dir(_state)
+
+
+# About the commented lines: I tried to turn the
+# personalities into appropriate collections. This
+# works fine, but the pydev debugger ignores this
+# information. Perhaps we can reactivate this code later.
+class SurrogatePersonalityDict(SurrogateState
+                               # ,collections.Mapping
+                               ):
+    def __setitem__(self, key, value):
+        self._Surrogate__state._dict[key] = value
+
+#     def __len__(self):
+#         return len(self._Surrogate__state._dict)
+#
+#     def __getitem__(self, index):
+#         self._Surrogate__state._dict[index]
+#
+#     def __iter__(self):
+#         return iter(self._Surrogate__state._dict)
+
+
+class SurrogatePersonalityList(SurrogateState
+                               # , collections.Sequence
+                               ):
+    def append(self, value):
+        return self._Surrogate__state._list.append(value)
+
+    def extend(self, sequence):
+        return self._Surrogate__state._list.extend(sequence)
+
+#     def __len__(self):
+#         return len(self._Surrogate__state._list)
+#
+#     def __getitem__(self, index):
+#         self._Surrogate__state._list[index]
+#
+#     def __iter__(self):
+#         return iter(self._Surrogate__state._list)
+
+
+def newUnpicklerSurrogate(operation, exc=None, func=None, args=(), module=None, name=None):
+    if operation == "_instantiate" and isinstance(func, AbstractSurrogate):
+        return func.__new__(func, *args)
+    clsname = "ResultSurrogate_" + operation
+    if isinstance(clsname, unicode):
+        clsname = clsname.encode("UTF-8")
+    d = {}
+    if module:
+        d['__module__'] = module
+    cls = type(clsname, (AbstractSurrogate,), d)
+    obj = object.__new__(cls)
+    state = SurrogateState(operation=operation, exc=exc, func=func, args=args, module=module, name=name)
+    object.__setattr__(obj, "_Surrogate__state", state)
+    return obj
 
 
 class FailSaveUnpickler(pickle.Unpickler):
@@ -1320,7 +1439,7 @@ class FailSaveUnpickler(pickle.Unpickler):
     def get_surrogate(self, operation, exc, func=None, args=(), module=None, name=None):
         if exc:
             self.on_exception("Created surrogate for operation " + operation)
-        return UnpicklerSurrogate(operation, exc, func=func, args=args, module=module, name=name)
+        return newUnpicklerSurrogate(operation, exc, func=func, args=args, module=module, name=name)
 
     def _instantiate(self, klass, k):
         args = tuple(self.stack[k + 1:])
