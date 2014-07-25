@@ -1604,7 +1604,7 @@ def dump_on_unhandled_exceptions(function=None, dump_dir=None, message=None, fil
 
     if dump_dir is None:
         dump_dir = os.environ.get("PYHEAPDUMP_DIR")
-        if dump_dir.lower() == "disable":
+        if dump_dir and dump_dir.lower() == "disable":
             return function
 
     if dump_dir is not None and not os.path.isdir(dump_dir):
