@@ -23,6 +23,10 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2014-07-25 Version 0.2.4:
+
+ * Fix a trivial bug introduced in 0.2.3: crash, if PYHEAPDUMP_DIR is unset.
+
 2014-07-25 Version 0.2.3:
 
  * Rewrote the unpickle surrogate mechanism.
