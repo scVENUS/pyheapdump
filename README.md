@@ -23,6 +23,17 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2014-07-25 Version 0.2.3:
+
+ * Rewrote the unpickle surrogate mechanism.
+   Now the surrogate classes resemble the original classes
+   and support operations used during unpickling.
+
+ * Setting the environmnet variable PYHEAPDUMP_DIR to "disable"
+   disables pyheapdump.
+
+ * Pydevd only: print the exception to the debugger console.
+
 2014-07-13 Version 0.2.2:
 
  * Add an option to control the inclusion of python source into the dump.
