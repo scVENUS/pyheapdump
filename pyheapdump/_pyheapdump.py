@@ -174,11 +174,11 @@ else:
             self.is_atomic = is_atomic
 
         def _unlock(self):
-            stackless.current.set_atomic(self.is_atomic)
+            stackless.current.set_atomic(self.is_atomic)  # @UndefinedVariable
 
     def lock_function():
         # create an atomic context
-        old_value = stackless.current.set_atomic(1)
+        old_value = stackless.current.set_atomic(1)  # @UndefinedVariable
         return _Stackless_Lock_Status(old_value)
 
     def _run_in_tasklet_call_func(result, current_tasklet, func, args, kw):
@@ -191,7 +191,7 @@ else:
             current_tasklet.switch()
 
     def run_in_tasklet(func, *args, **kw):
-        current = stackless.current
+        current = stackless.current  # @UndefinedVariable
         result = []
 
         result.append(stackless.tasklet())

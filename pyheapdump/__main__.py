@@ -66,7 +66,7 @@ def main(argv=None):
     if namespace.debug_pyheapdump:
         # It is better to use remote debugging, because of the debugger specific code later on
         sys.path.append(namespace.debugger_dir)
-        import pydevd
+        import pydevd  # @UnresolvedImport
         pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
     return debug_dump(dumpfile=namespace.dumpfile, debugger_options=vars(namespace))
 
