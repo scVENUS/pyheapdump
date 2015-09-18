@@ -1131,7 +1131,7 @@ def invoke_pydevd(dump, debugger_options):
         mp_globals['os'] = MonkeyPatchAttr(os, 'path', MonkeyPatchAttr(os.path, 'exists', mp_exists))
         mp_globals['open'] = mp_open
 
-        # recreate the method with using the new globals dictionary
+        # recreate the method using the new globals dictionary
         mp_processNetCommand = types.FunctionType(pnc.__code__, mp_globals, pnc.__name__, pnc.__defaults__, pnc.__closure__)
         for name in ('__doc__', '__dict__', '__module__', '__qualname__', '__annotations__', '__kwdefaults__'):
             try:
@@ -1186,22 +1186,24 @@ def invoke_pydevd(dump, debugger_options):
         except AttributeError:
             tb = None
 
-    if frames:
+    lines = ["", "Entering debugger for post mortem analysis of a Python heapdump."]
 
-        lines = []
+    if frames:
         try:
             formattedException = traceback.format_exception(dump['exception_class'], dump['exception'], dump['traceback'])
 
-            lines.append("Entering debugger for post mortem analysis of an exception.")
             lines.append("")
-            lines.append("Exception information")
+            lines.append('Exception information (stack displayed as "MainThread - pid...")')
             lines.extend(formattedException)
             lines.append("")
-            lines.append("This is a POST MORTEM analysis: you can inspect variables in the call stack,")
-            lines.append("but once you step or continue, the debugging terminates.")
         except Exception:
             traceback.print_exc()
 
+    lines.append("This is a POST MORTEM analysis: you can inspect variables in the call stack,")
+    lines.append("but once you step or continue, the debugging terminates.")
+    debugerWriteMsg(lines)
+
+    if frames:
         frames_byid = {}
         tb = None
         frame = frames[0]
@@ -1211,10 +1213,22 @@ def invoke_pydevd(dump, debugger_options):
         frame = frames[0]
         frames = None
 
-        if lines:
-            debugerWriteMsg(lines)
+        info.exception = (dump.get('exception_class'), dump.get('exception'), tb)
         info.pydev_force_stop_at_exception = (frame, frames_byid)
-        pydevd.GetGlobalDebugger().force_post_mortem_stop += 1
+        info.message = "Exception from Python heapdump"
+        debugger =pydevd.GetGlobalDebugger()
+        # pydevd_tracing.SetTrace(None) #no tracing from here
+        # pydev_log.debug('Handling post-mortem stop on exception breakpoint %s'% exception_breakpoint.qname)
+        try:
+            handle_post_mortem_stop = debugger.handle_post_mortem_stop
+        except AttributeError:
+            # Pydev versions up and including to 3.6.0
+            debugger.force_post_mortem_stop += 1
+        else:
+            # Pydev versions since 3.7. Tested with 4.3.0
+            from pydevd_tracing import SetTrace  # @UnresolvedImport
+            SetTrace(None) # no tracing from here on. Otherwise we get a dead lock.
+            handle_post_mortem_stop(info, current_thread)
     else:
         pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
 
