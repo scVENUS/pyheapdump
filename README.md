@@ -25,6 +25,11 @@ Changelog
 
 2015-08-25 Version 0.2.5:
 
+ * Don't break the Python class pickle.Unpickler. Previous versions of
+   pyheapdump modified the dispatch table of class Unpickler.
+
+2015-08-25 Version 0.2.5:
+
  * Support Pydev versions 3.7 and up (tested with version 4.3.0).
 
 2014-07-25 Version 0.2.4:
