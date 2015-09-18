@@ -23,7 +23,7 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
-2015-08-25 Version 0.2.5:
+2015-08-25 Version 0.2.6:
 
  * Don't break the Python class pickle.Unpickler. Previous versions of
    pyheapdump modified the dispatch table of class Unpickler.
