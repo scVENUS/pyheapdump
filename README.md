@@ -23,6 +23,10 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2015-08-25 Version 0.2.5:
+
+ * Support Pydev versions 3.7 and up (tested with version 4.3.0).
+
 2014-07-25 Version 0.2.4:
 
  * Fix a trivial bug introduced in 0.2.3: crash, if PYHEAPDUMP_DIR is unset.
