@@ -1444,7 +1444,9 @@ def newUnpicklerSurrogate(operation, exc=None, func=None, args=(), module=None, 
 class FailSaveUnpickler(pickle.Unpickler):
     """A fail save unpickler
     """
-    dispatch = pickle.Unpickler.dispatch
+    # make a copy of the global dispatch table
+    # the unpickler uses self.dispatch to access the table
+    dispatch = dict(pickle.Unpickler.dispatch)
 
     def on_exception(self, resolution):
         traceback.print_exc()
