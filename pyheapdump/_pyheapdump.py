@@ -1047,7 +1047,13 @@ def invoke_pdb(dump, debugger_options):
 
 def invoke_pydevd(dump, debugger_options):
     import pydevd  # @UnresolvedImport
-    from pydevd_custom_frames import addCustomFrame  # @UnresolvedImport
+    # avoid an explicit import, the module name is not fixed
+    pydevd_custom_frames = sys.modules[pydevd.CustomFramesContainer.__module__]
+    try:
+        add_custom_frame = pydevd_custom_frames.add_custom_frame
+    except AttributeError:
+        # compatibility code for pydevd versions < 4.5.0
+        add_custom_frame = pydevd_custom_frames.addCustomFrame
 
     class IoBuffer(object):
         __slots__ = ('msg',)
@@ -1058,11 +1064,24 @@ def invoke_pydevd(dump, debugger_options):
         def getvalue(self):
             return self.msg
 
+    def get_global_debugger():
+        try:
+            ggd = pydevd.get_global_debugger
+        except AttributeError:
+            # compatibility code for pydevd versions < 4.5.0
+            ggd = pydevd.GetGlobalDebugger
+        return ggd()
+
     def debugerWrite(msg, stderr=False):
-        debugger = pydevd.GetGlobalDebugger()
+        debugger = get_global_debugger()
         if debugger is None:
             return
-        debugger.checkOutput(IoBuffer(msg), 2 if stderr else 1)
+        try:
+            check_output = debugger.check_output
+        except AttributeError:
+            # compatibility code for pydevd versions < 4.5.0
+            check_output = debugger.checkOutput
+        check_output(IoBuffer(msg), 2 if stderr else 1)
 
     def debugerWriteMsg(lines):
         eol = '\n'
@@ -1075,7 +1094,7 @@ def invoke_pydevd(dump, debugger_options):
 
     files = dump.get('files')
     if files:
-        # we monkey patch the global namespace of PyDB.processNetCommand
+        # we monkey patch the global namespace of _pydevd_bundle.pydevd_process_net_command.process_net_command
 
         class MonkeyPatchAttr(object):
             def __init__(self, baseobj, name, replacement):
@@ -1121,8 +1140,14 @@ def invoke_pydevd(dump, debugger_options):
                 return io.BytesIO(f)
             return open(name, *args, **kw)
 
-        PyDB = pydevd.PyDB
-        pnc = PyDB.processNetCommand
+        # Patch the processing of command CMD_GET_FILE_CONTENTS to deliver the source stored in the dump
+        try:
+            from _pydevd_bundle import pydevd_process_net_command as pnc_holder
+            pnc = pnc_holder.process_net_command
+        except ImportError:
+            pnc_holder = pydevd.PyDB
+            pnc = pnc_holder.processNetCommand
+
         if not isinstance(pnc, types.FunctionType):
             pnc = pnc.__func__
 
@@ -1138,7 +1163,7 @@ def invoke_pydevd(dump, debugger_options):
                 setattr(mp_processNetCommand, name, getattr(pnc, name))
             except AttributeError:
                 pass
-        PyDB.processNetCommand = mp_processNetCommand
+        setattr(pnc_holder, pnc.__name__, mp_processNetCommand)
 
     current_thread_id = thread.get_ident()
     current_thread = threading.current_thread()
@@ -1155,23 +1180,22 @@ def invoke_pydevd(dump, debugger_options):
         for tid, value in dump['tasklets'].iteritems():
             tasklet = value[0]
             if tasklet.frame is not None:
-                addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_main=True, is_current=(tasklet is value[1]),
-                                                            main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+                add_custom_frame(tasklet.frame, _tasklet_name(tasklet, tid, is_main=True, is_current=(tasklet is value[1]),
+                                                              main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
             tasklet = value[1]
             if tasklet.frame is not None and tasklet is not value[0]:
-                addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid, is_current=True,
-                                                            main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+                add_custom_frame(tasklet.frame, _tasklet_name(tasklet, tid, is_current=True,
+                                                              main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
             for oid in value[2]:
                 tasklet = value[2][oid]
                 if tasklet is value[0] or tasklet is value[1] or tasklet.frame is None:
                     continue
-                addCustomFrame(tasklet.frame, _tasklet_name(tasklet, tid,
-                                                            main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+                add_custom_frame(tasklet.frame, _tasklet_name(tasklet, tid,
+                                                              main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
     elif 'thread_frames' in dump:
         for tid, frame in dump['thread_frames'].iteritems():
-            addCustomFrame(frame, _thread_name(tid, main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
+            add_custom_frame(frame, _thread_name(tid, main_thread_id=mtid, current_thread_id=ctid), current_thread_id)
 
-    info = current_thread.additionalInfo
     tb = dump.get('traceback')
     frames = []
     while tb:
@@ -1213,22 +1237,31 @@ def invoke_pydevd(dump, debugger_options):
         frame = frames[0]
         frames = None
 
-        info.exception = (dump.get('exception_class'), dump.get('exception'), tb)
-        info.pydev_force_stop_at_exception = (frame, frames_byid)
-        info.message = "Exception from Python heapdump"
-        debugger =pydevd.GetGlobalDebugger()
-        # pydevd_tracing.SetTrace(None) #no tracing from here
-        # pydev_log.debug('Handling post-mortem stop on exception breakpoint %s'% exception_breakpoint.qname)
+        debugger = get_global_debugger()
+        excinfo = (dump.get('exception_class'), dump.get('exception'), dump.get('traceback'))
         try:
-            handle_post_mortem_stop = debugger.handle_post_mortem_stop
+            info = current_thread.additional_info
         except AttributeError:
-            # Pydev versions up and including to 3.6.0
-            debugger.force_post_mortem_stop += 1
+            # compatibility code for pydevd versions < 4.5.0
+            info = current_thread.additionalInfo
+            info.exception = excinfo
+            info.pydev_force_stop_at_exception = (frame, frames_byid)
+            info.message = "Exception from Python heapdump"
+            try:
+                handle_post_mortem_stop = debugger.handle_post_mortem_stop
+            except AttributeError:
+                # Pydev versions up and including to 3.6.0
+                debugger.force_post_mortem_stop += 1
+            else:
+                # Pydev versions since 3.7 up 4.4.x. Tested with 4.3.0
+                # no tracing from here on. Otherwise we get a dead lock.
+                pydevd.pydevd_tracing.SetTrace(None)
+                handle_post_mortem_stop(info, current_thread)
         else:
-            # Pydev versions since 3.7. Tested with 4.3.0
-            from pydevd_tracing import SetTrace  # @UnresolvedImport
-            SetTrace(None) # no tracing from here on. Otherwise we get a dead lock.
-            handle_post_mortem_stop(info, current_thread)
+            # since Pydev 4.5.0
+            info.pydev_message = "Post mortem exception analysis"
+            pydevd.pydevd_tracing.SetTrace(None)
+            debugger.handle_post_mortem_stop(threading.current_thread(), frame, frames_byid, excinfo)
     else:
         pydevd.settrace(stdoutToServer=True, stderrToServer=True, suspend=True, trace_only_current_thread=True)
 
