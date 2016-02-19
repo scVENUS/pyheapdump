@@ -1,7 +1,7 @@
 #
 # -*- coding: utf-8 -*-
 #
-# Copyright (c) 2014 by Anselm Kruis
+# Copyright (c) 2016 by Anselm Kruis
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -25,8 +25,6 @@ import tempfile
 import os
 import threading
 import io
-RUN_INTERACTIVE_TESTS = os.environ.get('RUN_INTERACTIVE_TESTS')
-
 from pyheapdump import _pyheapdump
 
 
@@ -64,7 +62,7 @@ class PyheapdumpTest(unittest.TestCase):
         super(PyheapdumpTest, self).tearDown()
 
     def raise_exc(self):
-        very_special_name = 4711
+        very_special_name = 4711  # @UnusedVariable
         return self.raise_exc1()
 
     def raise_exc1(self):
@@ -82,7 +80,7 @@ class PyheapdumpTest(unittest.TestCase):
         self.assertEqual(len(p), 2)
         self.assertIsInstance(p[0], bytes)
         self.assertIsInstance(p[1], dict)
-        modules = sPickle.SPickleTools.getImportList(p[0])
+        modules = sPickle.SPickleTools.getImportList(p[0])  # @UnusedVariable
         # pprint.pprint(modules)
         # sPickle.SPickleTools.dis(p)
 
@@ -110,8 +108,24 @@ class PyheapdumpTest(unittest.TestCase):
         self.assertIsInstance(dump, dict)
         self.assertEqual(dump['dump_version'], _pyheapdump.DUMP_VERSION)
 
-    @unittest.skipUnless(RUN_INTERACTIVE_TESTS, "test requires manual interaction (breaks into the debugger)")
+    USE_PYDEV_VERSION = os.environ.get("USE_PYDEV_VERSION")
+
+    #
+    # Run this test manually from the command line using appropriate values for USE_PYDEV_VERSION.
+    #
+    # $ USE_PYDEV_VERSION=4_4_0 python -m unittest pyheapdump.test_pyheapdump.PyheapdumpTest.testDebugDump
+    #
+    @unittest.skipUnless(USE_PYDEV_VERSION, "test requires manual interaction (breaks into the debugger)")
     def testDebugDump(self):
+        if self.USE_PYDEV_VERSION:
+            if "pydevd" not in sys.modules:
+                directory = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pydevd_archives")
+                zip_file = os.path.join(directory, "pydev_{}.zip".format(self.USE_PYDEV_VERSION))
+                self.assertTrue(os.path.isfile(zip_file), "Not a file: {}".format(zip_file))
+                sys.path.insert(0, zip_file)
+            else:
+                self.skipTest("pydevd already loaded")
+
         apply(self._writeDump)
         print("Debugging dump file: ", self.dump_file_name)
         _pyheapdump.debug_dump(self.dump_file_name)
