@@ -1,7 +1,7 @@
 #
 # -*- coding: utf-8 -*-
 #
-# Copyright (c) 2014 by Anselm Kruis
+# Copyright (c) 2016 by Anselm Kruis
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -17,11 +17,6 @@
 #
 
 from __future__ import absolute_import, print_function, unicode_literals, division
-
-DUMP_VERSION = 2
-# for now we export just a limited set of symbols.
-__all__ = ('save_dump', 'create_dump', 'load_dump',
-           'debug_dump', 'MimeMessageFormatter', 'dump_on_unhandled_exceptions')
 
 import os
 import sys
@@ -47,6 +42,11 @@ from email.mime import application, multipart
 from email.utils import formatdate
 
 import sPickle
+
+DUMP_VERSION = 2
+# for now we export just a limited set of symbols.
+__all__ = ('save_dump', 'create_dump', 'load_dump',
+           'debug_dump', 'MimeMessageFormatter', 'dump_on_unhandled_exceptions')
 
 LOGGER_NAME = __name__
 
