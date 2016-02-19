@@ -23,6 +23,7 @@ if sys.version_info < (2, 7):
     print 'ERROR: pyheapdump requires at least Python 2.7 to run.'
     sys.exit(1)
 
+release = "unknown"
 for line in open('conf.py'):
     if line.startswith('release = '):
         exec(line)
@@ -38,7 +39,7 @@ setup(
     packages=['pyheapdump'],
 
     # don't forget to add these files to MANIFEST.in too
-    #package_data={'pyheapdump': ['examples/*.py']},
+    # package_data={'pyheapdump': ['examples/*.py']},
 
     long_description="""
 pyheapdump is a Post-Mortem debugging extension
@@ -58,22 +59,23 @@ Python 3 version.
 Git repository: git://github.com/akruis/pyheapdump.git
 """,
     classifiers=[
-                 "License :: OSI Approved :: Apache Software License",
-                 "Programming Language :: Python :: 2.7",
-                 "Programming Language :: Python :: Implementation :: CPython",
-                 "Programming Language :: Python :: Implementation :: Stackless",
-                 "Environment :: Console",
-                 "Operating System :: OS Independent",
-                 "Development Status :: 3 - Alpha",  # hasn't been tested outside of flowGuide2
-                 "Intended Audience :: Developers",
-                 "Topic :: Software Development :: Libraries :: Python Modules",
-                 'Topic :: Software Development :: Debuggers',
-      ],
-      keywords='pickling sPickle pickle stackless post-mortem debug debugger',
-      license='Apache Software License',
-      install_requires=[
-        'sPickle>=0.1.7',
-      ],
-      platforms="any",
-      test_suite="pyheapdump",
-    )
+        "License :: OSI Approved :: Apache Software License",
+        "Programming Language :: Python :: 2.7",
+        "Programming Language :: Python :: Implementation :: CPython",
+        "Programming Language :: Python :: Implementation :: Stackless",
+        "Environment :: Console",
+        "Operating System :: OS Independent",
+        # hasn't been tested outside of flowGuide2
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Developers",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+        'Topic :: Software Development :: Debuggers',
+    ],
+    keywords='pickling sPickle pickle stackless post-mortem debug debugger',
+    license='Apache Software License',
+    install_requires=[
+        'sPickle>=0.1.8',
+    ],
+    platforms="any",
+    test_suite="pyheapdump",
+)

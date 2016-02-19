@@ -3,3 +3,4 @@ include *.rst
 include *.md
 include LICENSE
 recursive-include examples *.py *.pth
+include pydevd_archives/README.txt
