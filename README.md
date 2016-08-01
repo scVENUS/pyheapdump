@@ -23,6 +23,8 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+2016-08-01 Version 0.2.8:
+
  * Fix an "OverflowError: signed integer is greater than maximum"
    in lock_function on non Stackless 64bit platforms.
 

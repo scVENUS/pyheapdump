@@ -74,7 +74,7 @@ Git repository: git://github.com/akruis/pyheapdump.git
     keywords='pickling sPickle pickle stackless post-mortem debug debugger',
     license='Apache Software License',
     install_requires=[
-        'sPickle>=0.1.8',
+        'sPickle>=0.1.11',
     ],
     platforms="any",
     test_suite="pyheapdump",
