@@ -23,6 +23,9 @@ pyheapdump in order to make it clear, that it is now a separate project.
 Changelog
 ---------
 
+ * Fix an "OverflowError: signed integer is greater than maximum"
+   in lock_function on non Stackless 64bit platforms.
+
 2016-02-19 Version 0.2.7:
 
  * Post mortem debugging no works with PyDev versions >= 4.5.0 too.

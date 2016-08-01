@@ -37,6 +37,7 @@ import logging
 import tempfile
 import functools
 import io
+import struct
 from email import header, message_from_file, message_from_string, message
 from email.mime import application, multipart
 from email.utils import formatdate
@@ -156,7 +157,10 @@ except ImportError:
         def _unlock(self):
             sys.setcheckinterval(self.checkinterval)
 
-    def lock_function(getcheckinterval=sys.getcheckinterval, setcheckinterval=sys.setcheckinterval, maxint=sys.maxint):
+    def lock_function(getcheckinterval=sys.getcheckinterval,
+                      setcheckinterval=sys.setcheckinterval,
+                      # maximum value of a native C "signed int"
+                      maxint=(1 << (8 * struct.calcsize(str("@i")) - 1)) - 1):
         # create an atomic context
         old_value = getcheckinterval()
         setcheckinterval(maxint)

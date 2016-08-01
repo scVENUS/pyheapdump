@@ -172,5 +172,23 @@ class UnpickleSurrogateTest(unittest.TestCase):
         self.assertIsInstance(surrogate2, self.surrogate._Surrogate__state._class)
 
 
+class LockFunctionTest(unittest.TestCase):
+    def test_lock_function(self):
+        old_value = sys.getcheckinterval()
+        self.addCleanup(sys.setcheckinterval, old_value)
+        lock_status = _pyheapdump.lock_function()
+        self.addCleanup(lock_status.unlock)
+        self.assertTrue(lock_status.is_locked)
+        self.assertFalse(lock_status.has_io_lock)
+        with lock_status.context_with_io():
+            self.assertFalse(lock_status.is_locked)
+            self.assertTrue(lock_status.has_io_lock)
+        self.assertFalse(lock_status.is_locked)
+        self.assertTrue(lock_status.has_io_lock)
+        lock_status.unlock()
+        self.assertFalse(lock_status.is_locked)
+        self.assertFalse(lock_status.has_io_lock)
+
+
 if __name__ == "__main__":
     unittest.main()
